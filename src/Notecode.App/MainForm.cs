@@ -135,12 +135,10 @@ internal sealed class MainForm : Form
     // server restarts with a different MCP configuration.
     private List<ToolSpec> _toolSpecs = new();
     private bool _toolSpecsLoaded;
-    private bool _toolSpecsIncludeRea;
 
     // The same catalogue, but for a BYOK provider, where the tools come from the
     // app's own MCP connections instead of from llama-server.
     private List<ToolSpec>? _byokToolSpecs;
-    private bool _byokToolSpecsIncludeRea;
     private CancellationTokenSource? _chatCts;
 
     // BYOK providers. The store holds the endpoints and the encrypted tokens.
@@ -163,6 +161,23 @@ internal sealed class MainForm : Form
     /// <summary>A skill loaded with /skill, waiting to be attached to the next turn.</summary>
     private sealed record SkillLoad(string Name, string Text);
     private SkillLoad? _pendingSkill;
+
+    /// <summary>
+    /// The conversation the model is given back on the next turn: the user's prompts
+    /// and the final answers, without the tool traffic. It is kept short on purpose
+    /// (see <see cref="TrimHistory"/>): on a CPU every token of context is read again
+    /// for every token the model writes.
+    /// </summary>
+    private readonly List<ChatMessage> _chatHistory = new();
+
+    // The prompt budget of a chat turn with the local model. Context is costly on a
+    // CPU twice over: once to prefill it, and again on every token decoded, because
+    // the model attends over all of it. These keep an ordinary turn near 2k tokens.
+    private const int EditorContextChars = 6_000;
+    private const int ToolResultChars = 4_000;
+    private const int HistoryMessages = 8;
+    private const int HistoryChars = 6_000;
+    private const int HistoryMessageChars = 1_500;
 
     // The conversations of this machine, and the one being had right now.
     private readonly SessionStore _sessions;
@@ -212,7 +227,12 @@ internal sealed class MainForm : Form
         PrimeOpenQueue();
         BuildUi();
         _mcp.Log += (s, m) => AppendAi($"[mcp:{s}] {m}");
-        _mcp.ToolsChanged += () => BeginInvoke(() => UpdateMcpStatus());
+        _mcp.ToolsChanged += () => BeginInvoke(() =>
+        {
+            // A server came or went, so the provider's tool set is rebuilt next turn.
+            _byokToolSpecs = null;
+            UpdateMcpStatus();
+        });
 
         // The app talks to the MCP servers itself, and the local backend uses
         // that path for them too: llama.cpp's own MCP client cannot carry a
@@ -1820,17 +1840,30 @@ internal sealed class MainForm : Form
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
         AppendAi($"[notecode] REA analyzing {dlg.FileName} ...");
-        var tools = await _mcp.ListAllToolsAsync();
-        var openTool = tools.FirstOrDefault(t => t.Server == "rea" && t.Name == "open_binary");
-        if (openTool is null)
+        if (!await _mcp.EnsureConnectedAsync(_cfg, "rea"))
         {
-            AppendAi("[notecode] REA MCP server is not connected.");
+            AppendAi("[notecode] the REA MCP server would not start.");
             return;
         }
 
-        using var args = JsonDocument.Parse("{}");
-        var result = await _mcp.CallToolAsync("rea", "open_binary", args.RootElement.Clone());
-        AppendAi(result);
+        try
+        {
+            var tools = await _mcp.ListToolsAsync(new[] { "rea" });
+            if (!tools.Any(t => t.Name == "open_binary"))
+            {
+                AppendAi("[notecode] the REA MCP server has no open_binary tool.");
+                return;
+            }
+
+            using var args = JsonDocument.Parse("{}");
+            var result = await _mcp.CallToolAsync("rea", "open_binary", args.RootElement.Clone());
+            AppendAi(result);
+        }
+        finally
+        {
+            await _mcp.DisconnectAsync("rea");
+            UpdateMcpStatus();
+        }
     }
 
     private void CopyKimiProviderConfig()
@@ -1978,7 +2011,7 @@ capabilities = [ ""tool_use"" ]
             case "fontsize": CmdFontSize(cmd.Arguments); break;
             case "tools": await CmdToolsAsync(); break;
             case "context": CmdContext(cmd.Arguments); break;
-            case "clear": _chat.Clear(); break;
+            case "clear": _chat.Clear(); _chatHistory.Clear(); break;
             case "status": CmdStatus(); break;
             default:
                 _chat.Note($"There is no command called `{cmd.Name}`. Type `/help` for the list.", "notecode");
@@ -2030,6 +2063,17 @@ capabilities = [ ""tool_use"" ]
 
         _chat.User($"/rea {project} {destination} {actions}".TrimEnd());
 
+        // REA is on demand: it is started here, for this turn, and stopped when
+        // the turn is over. Nothing else starts it, so its 170 tools and its
+        // node process cost nothing outside a /rea turn.
+        _chat.Activity("think", "Starting the REA server");
+        if (!await _mcp.EnsureConnectedAsync(_cfg, "rea"))
+        {
+            _reaRequest = null;
+            _chat.Note("The REA server would not start. See the MCP lines in the log.", "notecode · rea");
+            return;
+        }
+
         var prompt =
             $"[REA session]\n" +
             $"project: {project}\n" +
@@ -2039,7 +2083,16 @@ capabilities = [ ""tool_use"" ]
             "extracted data, scripts - into the output destination, and finish with a summary of " +
             "what you found and which files you wrote.";
 
-        await RunAiTurnAsync(prompt, includeRea: true);
+        try
+        {
+            await RunAiTurnAsync(prompt, includeRea: true);
+        }
+        finally
+        {
+            _reaRequest = null;
+            await _mcp.DisconnectAsync("rea");
+            BeginInvoke(UpdateMcpStatus);
+        }
     }
 
     private async Task CmdModelAsync(string argument)
@@ -2934,12 +2987,25 @@ capabilities = [ ""tool_use"" ]
             ? await _llama.GetToolsByNameAsync(wanted, ct)
             : await GetToolSpecsAsync(false, ct);
 
+        // llama-server only runs the notecode MCP server, so a tool of another
+        // server (blender_execute_python) is found in the app's own connections.
+        // The call is dispatched there too (LlamaServer.Dispatch).
+        if (_providers.ActiveProvider().IsLocal)
+        {
+            var found = new HashSet<string>(specs.Select(s => LlamaServer.StripServerPrefix(s.Name)), StringComparer.OrdinalIgnoreCase);
+            if (wanted.Any(w => !found.Contains(w)))
+            {
+                var connected = _mcp.ConnectedServers.Where(s => s != "notecode").ToArray();
+                specs.AddRange(ToToolSpecs(await _mcp.ListToolsAsync(connected, ct)));
+            }
+        }
+
         return specs.Where(s => wanted.Contains(LlamaServer.StripServerPrefix(s.Name))).ToList();
     }
 
     private async Task CmdToolsAsync()
     {
-        var specs = await GetToolSpecsAsync(_reaRequest is not null, CancellationToken.None);
+        var specs = await GetToolSpecsAsync(includeRea: false, CancellationToken.None);
         if (specs.Count == 0)
         {
             _chat.Note("No tools in this turn. Tick **Enable file tools**, or use `/rea` for the REA tools.",
@@ -3284,7 +3350,8 @@ capabilities = [ ""tool_use"" ]
             return;
         }
 
-        await RunAiTurnAsync(prompt, _reaRequest is not null, attachment);
+        // REA is never part of an ordinary turn: its tools are loaded by /rea only.
+        await RunAiTurnAsync(prompt, includeRea: false, attachment);
     }
 
     /// <summary>
@@ -3312,6 +3379,17 @@ capabilities = [ ""tool_use"" ]
             return;
         }
 
+        // The projector that lets the model see is only loaded when vision is on, so
+        // a picture sent to a server without it would come back as an error.
+        if (local && attachment is { IsImage: true } && !_cfg.Llama.LoadMmproj)
+        {
+            _chat.Note(
+                "Vision is off, so the local model cannot see the picture. Set `llama.loadMmproj` to `true` " +
+                "in `runtime/notecode.config.json` and restart the server. It costs 1.1 GiB of RAM.",
+                "notecode");
+            return;
+        }
+
         _chat.User(prompt, attachment?.DataUrl, attachment?.Name);
         Record("user", prompt);
 
@@ -3332,6 +3410,11 @@ capabilities = [ ""tool_use"" ]
             new("system", BuildSystemPrompt())
         };
 
+        // The last few exchanges, so the model remembers what was just said. They
+        // come straight after the system prompt and only ever grow at the end, so
+        // the server's prompt cache keeps the earlier ones.
+        messages.AddRange(_chatHistory);
+
         // A skill loaded with /skill is context for this turn.
         if (_pendingSkill is not null)
         {
@@ -3347,7 +3430,12 @@ capabilities = [ ""tool_use"" ]
             try
             {
                 var content = await File.ReadAllTextAsync(_currentPath);
-                if (content.Length > 40_000) content = content[..40_000] + "\n... (truncated)";
+                if (content.Length > EditorContextChars)
+                {
+                    content = content[..EditorContextChars] +
+                              $"\n... (first {EditorContextChars:N0} of {content.Length:N0} characters; " +
+                              "call notecode_get_editor_buffer or notecode_read_file for the rest)";
+                }
                 messages.Add(new ChatMessage("user",
                     $"[current editor buffer]\npath: {_currentPath}\ntype: {_types.Describe(_currentPath)}\n---\n{content}"));
             }
@@ -3369,7 +3457,13 @@ capabilities = [ ""tool_use"" ]
 
         try
         {
-            await RunToolLoopAsync(messages, tools, backend, ct);
+            var answer = await RunToolLoopAsync(messages, tools, backend, ct);
+            if (!string.IsNullOrEmpty(answer))
+            {
+                _chatHistory.Add(new ChatMessage("user", Truncate(prompt, HistoryMessageChars)));
+                _chatHistory.Add(new ChatMessage("assistant", Truncate(answer, HistoryMessageChars)));
+                TrimHistory();
+            }
         }
         catch (OperationCanceledException)
         {
@@ -3381,26 +3475,33 @@ capabilities = [ ""tool_use"" ]
         }
     }
 
+    /// <summary>
+    /// Drops the oldest exchanges until the history fits its budget. A pair goes
+    /// as a pair, so the model never sees an answer without its question.
+    /// </summary>
+    private void TrimHistory()
+    {
+        while (_chatHistory.Count > 2 &&
+               (_chatHistory.Count > HistoryMessages || _chatHistory.Sum(m => m.Content.Length) > HistoryChars))
+        {
+            _chatHistory.RemoveRange(0, 2);
+        }
+    }
+
+    /// <summary>
+    /// The system prompt. It names the tools the way they are published, with the
+    /// server in front, and it is kept short: it is read on every turn.
+    /// </summary>
     private static string BuildSystemPrompt() =>
-        "You are notecode, a local coding assistant embedded in a code editor. " +
-        "Be concise and concrete. You have tools that act on the workspace: " +
-        "save_as(path, content, type, open) writes a file and opens it in the editor - " +
-        "the extension decides the file type, and type names the language when the " +
-        "path has no extension (for example type='cpp' or type='markdown'); " +
-        "open_in_editor(path) opens an existing file; list_files(dir, recursive) " +
-        "browses the workspace; read_file(path) reads a file. " +
-        "When the user says 'save as ...' or names a file, call save_as with the " +
-        "right extension (for example plan.md, agents.md, main.cpp, index.html, " +
-        "script.py) and then say which file you wrote. " +
-        "Always use save_as and not write_file when the user asks for a new file, " +
-        "a page or a document, because save_as opens it in the editor as a tab. " +
-        "For the filesystem: make_folder(path) creates a folder; move_path(from, to) " +
-        "moves or renames a file or a folder (it also creates the destination folder); " +
-        "copy_path(from, to) copies a file or a whole folder; delete_path(path) removes " +
-        "one. Use them when the user talks about moving, renaming, copying, pasting or " +
-        "tidying files, without asking for the tool to be named. " +
-        "When the user asks for a web page, write real HTML with a doctype, a title and " +
-        "some content, and save it as index.html unless they name another file.";
+        "You are notecode, a local coding assistant in a code editor. Be concise and concrete. " +
+        "Workspace tools: notecode_save_as(path, content) writes a new file and opens it in the editor - " +
+        "use it whenever the user asks for a new file, page or document, with the right extension " +
+        "(plan.md, main.cpp, index.html, script.py), then say which file you wrote. " +
+        "edit_file changes part of an existing file. notecode_read_file reads a file, " +
+        "notecode_list_files browses, grep_search and file_glob_search search. " +
+        "notecode_move_path moves or renames, notecode_delete_path deletes, " +
+        "notecode_run_command runs a command, notecode_get_editor_buffer reads the open editor tab. " +
+        "A web page is real HTML with a doctype and a title, saved as index.html unless named.";
 
     /// <summary>
     /// Works out what a tool call is doing, so the activity row can show an icon and
@@ -3538,7 +3639,8 @@ capabilities = [ ""tool_use"" ]
     /// and the client has to dispatch it and feed the answer back. Each pass is one turn; the
     /// loop ends as soon as a turn comes back without a tool call.
     /// </summary>
-    private async Task RunToolLoopAsync(
+    /// <returns>the final answer, or null when the loop ran out of turns.</returns>
+    private async Task<string?> RunToolLoopAsync(
         List<ChatMessage> messages, List<ToolSpec> tools, IChatBackend backend, CancellationToken ct)
     {
         const int MaxTurns = 8;
@@ -3554,26 +3656,31 @@ capabilities = [ ""tool_use"" ]
             // reasoning of the last turn is cleared.
             _chat.Activity("think", "Thinking");
 
-            var result = await backend.StreamTurnAsync(
-                messages,
-                tools,
-                delta =>
-                {
-                    if (InvokeRequired) BeginInvoke(() => _chat.Delta(delta));
-                    else _chat.Delta(delta);
-                },
-                ct,
-                reasoning =>
-                {
-                    if (InvokeRequired) BeginInvoke(() => _chat.Reasoning(reasoning));
-                    else _chat.Reasoning(reasoning);
-                });
+            Action<string> onDelta = delta =>
+            {
+                if (InvokeRequired) BeginInvoke(() => _chat.Delta(delta));
+                else _chat.Delta(delta);
+            };
+            Action<string> onReasoning = reasoning =>
+            {
+                if (InvokeRequired) BeginInvoke(() => _chat.Reasoning(reasoning));
+                else _chat.Reasoning(reasoning);
+            };
+
+            // The local model gets a cap on its answer, so a runaway turn cannot keep
+            // growing the context every later token has to attend over.
+            var result = backend is LlamaServer llama
+                ? await llama.StreamChatTurnAsync(messages, tools, onDelta, onReasoning,
+                    maxTokens: _cfg.Llama.Agent.MaxTokens, ct: ct)
+                : await backend.StreamTurnAsync(messages, tools, onDelta, ct, onReasoning);
 
             if (result.ToolCalls.Count == 0)
             {
                 if (result.Content.Length == 0) { _chat.Assistant("(no output)"); Record("assistant", "(no output)"); }
                 else { _chat.Assistant(result.Content); Record("assistant", result.Content); }
-                return;
+                if (result.FinishReason == "length")
+                    AppendAi($"[notecode] the answer hit the {_cfg.Llama.Agent.MaxTokens}-token cap (llama.agent.maxTokens).", "warn");
+                return result.Content;
             }
 
             // Keep the assistant turn that asked for the tools, so the template can render the
@@ -3591,11 +3698,17 @@ capabilities = [ ""tool_use"" ]
                 _chat.Tool(call.Name, Truncate(call.ArgumentsJson, 1200), output);
                 Record("tool", $"{call.Name}\n{Truncate(output, 600)}");
 
-                messages.Add(new ChatMessage("tool", output, call.Id));
+                // The model gets the head of a long result: the whole of it would be read
+                // again on every later pass of this loop. The panel above shows all of it.
+                var forModel = output.Length > ToolResultChars
+                    ? output[..ToolResultChars] + $"\n... ({output.Length - ToolResultChars:N0} more characters cut; ask for a narrower range)"
+                    : output;
+                messages.Add(new ChatMessage("tool", forModel, call.Id));
             }
         }
 
         AppendAi("[notecode] stopped after the maximum number of tool turns.", "warn");
+        return null;
     }
 
     /// <summary>
@@ -3607,42 +3720,64 @@ capabilities = [ ""tool_use"" ]
     /// </summary>
     private async Task<List<ToolSpec>> GetToolSpecsAsync(bool includeRea, CancellationToken ct)
     {
+        // The everyday set is cached. REA is never in it: the REA server only
+        // runs during a /rea turn, so its tools are added on top for that turn.
+        List<ToolSpec> baseSpecs;
         if (_providers.ActiveProvider().IsLocal)
         {
-            if (_toolSpecsLoaded && _toolSpecsIncludeRea == includeRea) return _toolSpecs;
+            if (!_toolSpecsLoaded)
+            {
+                _toolSpecs = await _llama.GetToolsAsync(includeRea: false, ct);
+                _toolSpecsLoaded = _toolSpecs.Count > 0;
 
-            _toolSpecs = await _llama.GetToolsAsync(includeRea, ct);
-            _toolSpecsLoaded = true;
-            _toolSpecsIncludeRea = includeRea;
-            return _toolSpecs;
+                // An ordinary turn gets the short chat set, in the order the config
+                // lists it, so the tool block of the prompt is the same every turn.
+                var chat = _cfg.Llama.Agent.ChatTools;
+                if (chat.Count > 0)
+                {
+                    _toolSpecs = chat
+                        .Select(n => _toolSpecs.FirstOrDefault(t => t.Name == n))
+                        .OfType<ToolSpec>()
+                        .ToList();
+                }
+            }
+            baseSpecs = _toolSpecs;
+        }
+        else
+        {
+            // llama-server is not in the loop, so the tools come from the app's
+            // own MCP connections - every connected server except the on-demand
+            // ones. The Blender server is one of them, which is how a BYOK
+            // provider gets to drive Blender.
+            if (_byokToolSpecs is null)
+            {
+                var wanted = _cfg.Mcp.Servers.Where(kv => !kv.Value.OnDemand).Select(kv => kv.Key).ToArray();
+                _byokToolSpecs = ToToolSpecs(await _mcp.ListToolsAsync(wanted, ct));
+            }
+            baseSpecs = _byokToolSpecs;
         }
 
-        // Only the servers whose tools are actually wanted are asked. The REA
-        // server is an npx cold start that publishes 170 tools, and listing it
-        // can take tens of seconds - a turn that does not use those tools should
-        // not wait for them.
-        if (_byokToolSpecs is not null && _byokToolSpecsIncludeRea == includeRea)
-            return _byokToolSpecs;
+        if (!includeRea) return baseSpecs;
 
-        // Every server that is configured, except REA unless it was asked for.
-        // REA is an npx cold start that publishes 170 tools, and listing it can
-        // take tens of seconds. The other servers are already connected, so
-        // asking them is cheap - and the Blender server is one of them, which
-        // is how a BYOK provider gets to drive Blender.
-        var wanted = _cfg.Mcp.Servers.Keys
-            .Where(k => includeRea || !string.Equals(k, "rea", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
+        // On the local backend the REA calls are dispatched through the app's
+        // own client as well (see LlamaServer.Dispatch), since llama-server
+        // does not run REA any more.
+        var rea = ToToolSpecs(await _mcp.ListToolsAsync(new[] { "rea" }, ct));
+        return baseSpecs.Concat(rea).ToList();
+    }
 
-        var all = await _mcp.ListToolsAsync(wanted, ct);
+    /// <summary>
+    /// MCP tools as the model sees them. They are offered with the server name
+    /// in front, the same way llama-server publishes them, so a skill that names
+    /// `blender_execute_python` works the same on the local backend and on a
+    /// provider.
+    /// </summary>
+    private static List<ToolSpec> ToToolSpecs(IEnumerable<McpTool> tools)
+    {
         var specs = new List<ToolSpec>();
-        foreach (var tool in all)
+        foreach (var tool in tools)
         {
-            // The tools are offered with the server name in front, the same way
-            // llama-server publishes them, so a skill that names
-            // `blender_execute_python` works the same on the local backend and
-            // on a provider.
             var name = tool.Server + "_" + tool.Name;
-
             var definition = JsonSerializer.SerializeToElement(new
             {
                 type = "function",
@@ -3655,9 +3790,6 @@ capabilities = [ ""tool_use"" ]
             });
             specs.Add(new ToolSpec(name, tool.Description, definition));
         }
-
-        _byokToolSpecs = specs;
-        _byokToolSpecsIncludeRea = includeRea;
         return specs;
     }
 
@@ -3672,6 +3804,26 @@ capabilities = [ ""tool_use"" ]
     /// </summary>
     private async Task<(bool Handled, string Output)> DispatchToolAsync(string toolName, string argumentsJson, CancellationToken ct)
     {
+        // The server name in front of the tool says which server owns it, so the
+        // call goes straight there. The longest name wins, so a server called
+        // "global-brain" is not mistaken for one called "global".
+        var owner = _mcp.ConnectedServers
+            .Where(s => toolName.StartsWith(s + "_", StringComparison.Ordinal))
+            .OrderByDescending(s => s.Length)
+            .FirstOrDefault();
+        if (owner is not null)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+                return (true, await _mcp.CallToolAsync(owner, toolName[(owner.Length + 1)..], doc.RootElement.Clone(), ct));
+            }
+            catch (Exception ex)
+            {
+                return (true, $"[tool error] {ex.Message}");
+            }
+        }
+
         var all = await _mcp.ListAllToolsAsync(ct);
 
         // The tools are offered to the model with the server name in front, so
@@ -3878,6 +4030,7 @@ capabilities = [ ""tool_use"" ]
 
         lock (_transcript) { _transcript.Clear(); }
         lock (_sessionMessages) { _sessionMessages.Clear(); }
+        _chatHistory.Clear();
         _chat.Clear();
         AppendAi("[notecode] new session.", "ok");
     }
@@ -3907,6 +4060,7 @@ capabilities = [ ""tool_use"" ]
     {
         lock (_transcript) { _transcript.Clear(); }
         lock (_sessionMessages) { _sessionMessages.Clear(); }
+        _chatHistory.Clear();
         _chat.Clear();
 
         if (_session is null) return;

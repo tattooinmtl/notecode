@@ -138,6 +138,13 @@ internal sealed class LlamaSection
     /// </summary>
     public string Mmproj { get; set; } = "";
 
+    /// <summary>
+    /// Whether the server loads <see cref="Mmproj"/>. The projector is 1.1 GiB, and
+    /// on a machine where the model barely fits that RAM is what keeps the model
+    /// from paging, so vision is turned on only when it is wanted.
+    /// </summary>
+    public bool LoadMmproj { get; set; }
+
     public string Host { get; set; } = "127.0.0.1";
     public int Port { get; set; } = 8080;
     public string Alias { get; set; } = "notecode-local";
@@ -167,7 +174,7 @@ internal sealed class CpuSection
 {
     public string Device { get; set; } = "none";
     public int NGpuLayers { get; set; }
-    public int Threads { get; set; } = 16;
+    public int Threads { get; set; } = 8;
     public int ThreadsBatch { get; set; } = 16;
     public int ThreadsHttp { get; set; } = 8;
 }
@@ -201,7 +208,7 @@ internal sealed class LlamaBuildDef
 
 internal sealed class ContextSection
 {
-    public int CtxSize { get; set; } = 32768;
+    public int CtxSize { get; set; } = 12288;
     public string CacheTypeK { get; set; } = "q8_0";
     public string CacheTypeV { get; set; } = "q8_0";
     public int Parallel { get; set; } = 1;
@@ -224,6 +231,17 @@ internal sealed class ContextSection
 internal sealed class AgentSection
 {
     public List<string> Tools { get; set; } = new();
+
+    /// <summary>
+    /// The tools an ordinary chat turn with the local model is given. Every schema is
+    /// prompt the CPU reads and attends over on every token, so this is a short list
+    /// rather than the whole catalogue. Empty means the whole catalogue.
+    /// </summary>
+    public List<string> ChatTools { get; set; } = new();
+
+    /// <summary>Cap on one assistant turn of the local model. 0 means no cap.</summary>
+    public int MaxTokens { get; set; } = 2048;
+
     public string McpServersConfig { get; set; } = "mcp-servers.json";
     public bool WebuiMcpProxy { get; set; } = true;
     public string Reasoning { get; set; } = "off";
@@ -238,6 +256,8 @@ internal sealed class ServerFlagsSection
     public int TimeoutSeconds { get; set; } = 3600;
     public bool NoWarmup { get; set; }
     public string LogLevel { get; set; } = "info";
+    public int CacheReuse { get; set; } = 256;
+    public bool Mlock { get; set; }
 }
 
 internal sealed class MemorySection
@@ -261,6 +281,12 @@ internal sealed class McpServerDef
     public string? Url { get; set; }
     public int ToolTimeoutMs { get; set; } = 60000;
     public string? Description { get; set; }
+
+    /// <summary>
+    /// Not started with the app. The server is connected only when a command asks
+    /// for it, and let go again when that command is done.
+    /// </summary>
+    public bool OnDemand { get; set; }
 }
 
 internal sealed class KimiSection

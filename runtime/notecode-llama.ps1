@@ -110,8 +110,10 @@ function Build-ServerArgs {
 
     # The vision projector that goes with the model. MiniCPM-V is a vision model and
     # the projector is the part that turns an image into tokens; without it the
-    # server refuses any request that carries an image.
-    if ($L.mmproj -and (Test-Path $L.mmproj)) {
+    # server refuses any request that carries an image. It is 1.1 GiB, so it is only
+    # loaded when vision is turned on (llama.loadMmproj): on this machine that RAM is
+    # what keeps the model from paging.
+    if ($L.loadMmproj -and $L.mmproj -and (Test-Path $L.mmproj)) {
         $a.Add('--mmproj'); $a.Add($L.mmproj)
     }
 
@@ -124,7 +126,7 @@ function Build-ServerArgs {
     $a.Add('--device'); $a.Add($device)
     $a.Add('--n-gpu-layers'); $a.Add([string]$layers)
 
-    # Threading: 16 generation threads, 16 batch threads (8 physical cores, 16 SMT).
+    # Threading: one decode thread per physical core, every logical core for the batch (prefill).
     $a.Add('--threads'); $a.Add([string]$threads)
     $a.Add('--threads-batch'); $a.Add([string]$L.cpu.threadsBatch)
     $a.Add('--threads-http'); $a.Add([string]$L.cpu.threadsHttp)
@@ -153,6 +155,13 @@ function Build-ServerArgs {
         $a.Add('--mcp-servers-config'); $a.Add($mcpPath)
     }
     if ($L.agent.webuiMcpProxy) { $a.Add('--webui-mcp-proxy') }
+
+    # Reuse cached KV chunks when only part of the prompt changed.
+    if ([int]$L.server.cacheReuse -gt 0) { $a.Add('--cache-reuse'); $a.Add([string]$L.server.cacheReuse) }
+
+    # Pin the model in RAM. Only with enough free memory - see the config comment.
+    # This build spells it --load-mode mmap+mlock; there is no --mlock flag.
+    if ($L.server.mlock) { $a.Add('--load-mode'); $a.Add('mmap+mlock') }
 
     if ($L.server.slots) { $a.Add('--slots') }
     $a.Add('--cors-origins'); $a.Add($L.server.corsOrigins)

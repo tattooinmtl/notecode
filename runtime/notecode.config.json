@@ -7,6 +7,8 @@
     "serverDir": "C:\\Llama\\llama.cpp\\build-notecode\\bin\\Release",
     "model": "C:\\models\\MiniCPM-V-4_7-35B-A3B-Q4_K_M.gguf",
     "mmproj": "C:\\models\\mmproj-model-f16.gguf",
+    "loadMmproj": false,
+    "$comment_loadMmproj": "The projector is 1.1 GiB, and on this 29 GiB machine that is the difference between the model staying in RAM and paging experts back in from disk on every token. It is loaded only when this is true (set it, restart the server, then attach images).",
     "$comment_mmproj": "The vision projector that goes with the MiniCPM-V model. It is what lets the model see an image; without it the server refuses any request that carries one. There is a second projector in C:\\models (mmproj-Qwythos-27B-F16.gguf) that belongs to the Qwythos-27B model, not this one.",
     "host": "127.0.0.1",
     "port": 8080,
@@ -16,13 +18,15 @@
     "cpu": {
       "device": "none",
       "nGpuLayers": 0,
-      "threads": 16,
+      "threads": 8,
       "threadsBatch": 16,
+      "$comment_threads": "Decode uses one thread per physical core: on 8 Zen 2 cores the SMT siblings share an FPU and an L2 and slow each other down. Prefill (threadsBatch) is batched matrix work and does use all 16.",
       "threadsHttp": 8
     },
 
     "context": {
-      "ctxSize": 32768,
+      "ctxSize": 12288,
+      "$comment_ctx": "A chat turn is kept near 2k tokens (chat tool set, capped editor buffer and history), so 12288 leaves room for a long tool loop. Every token of context is KV the CPU re-reads for each new token.",
       "cacheTypeK": "q8_0",
       "cacheTypeV": "q8_0",
       "parallel": 1,
@@ -32,9 +36,13 @@
     "agent": {
       "tools": ["read_file", "file_glob_search", "grep_search", "write_file", "edit_file", "get_info", "exec_shell_command"],
       "$comment": "b10988 built-in tool set is: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info. 'apply_diff' does not exist in this build.",
+      "chatTools": ["notecode_save_as", "notecode_read_file", "edit_file", "grep_search", "file_glob_search", "notecode_list_files", "notecode_run_command", "notecode_move_path", "notecode_delete_path", "notecode_get_editor_buffer"],
+      "$comment_chatTools": "The tools an ordinary chat turn with the local model is given, one per job. Every schema is prompt the CPU has to read and attend over on every token, so the 26-tool catalogue was cut to these. A slash command that needs more asks for it by name (the skill fixer, /rea).",
       "mcpServersConfig": "mcp-servers.json",
       "webuiMcpProxy": true,
       "reasoning": "off",
+      "maxTokens": 2048,
+      "$comment_maxTokens": "Cap on one assistant turn of the local model. 2048 and not lower: save_as carries a whole file in its arguments, and a call cut off mid-argument is lost.",
       "jinja": true
     },
 
@@ -71,6 +79,10 @@
       "corsOrigins": "localhost",
       "timeoutSeconds": 3600,
       "noWarmup": false,
+      "cacheReuse": 256,
+      "$comment_cacheReuse": "--cache-reuse: reuse KV chunks of at least this many tokens when only part of the prompt changed, instead of prefilling from the first difference.",
+      "mlock": false,
+      "$comment_mlock": "Passed as --load-mode mmap+mlock. Pins the model in RAM so experts are never paged out. Turn it on only when about 23 GiB is free with everything else running, or the rest of the system pages instead.",
       "logLevel": "info"
     }
   },
@@ -99,7 +111,8 @@
         "command": "cmd.exe",
         "args": ["/d", "/c", "npx", "-y", "rea-agents@6.4.0", "mcp"],
         "toolTimeoutMs": 600000,
-        "description": "REA reverse-engineering agent (170 tools). Same wiring kimi-code already uses."
+        "onDemand": true,
+        "description": "REA reverse-engineering agent (170 tools). Same wiring kimi-code already uses. On demand: started by /rea only, stopped when that turn ends, and not in mcp-servers.json, so llama-server never spawns it."
       },
       "blender": {
         "transport": "streamable-http",
@@ -145,7 +158,7 @@
       "base_url": "http://127.0.0.1:8080/v1",
       "api_key": "notecode-local",
       "model": "notecode-minicpm",
-      "max_context_size": 32768,
+      "max_context_size": 12288,
       "capabilities": ["tool_use"]
     }
   },
