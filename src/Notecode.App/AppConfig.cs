@@ -287,6 +287,13 @@ internal sealed class McpServerDef
     /// for it, and let go again when that command is done.
     /// </summary>
     public bool OnDemand { get; set; }
+
+    /// <summary>
+    /// For a server whose catalogue does not fit the local model's context: the
+    /// tools it is offered first, in this order. The rest follow, smallest first,
+    /// until the budget is spent. Names are without the server prefix.
+    /// </summary>
+    public List<string> LocalTools { get; set; } = new();
 }
 
 internal sealed class KimiSection

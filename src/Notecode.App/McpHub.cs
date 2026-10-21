@@ -15,17 +15,31 @@ internal sealed record McpTool(string Server, string Name, string Title, string 
 /// </summary>
 internal sealed class McpHub : IAsyncDisposable
 {
+    // Read from the UI thread and written from the startup task and the retry
+    // timer, so every access goes through a lock on the dictionary itself.
     private readonly Dictionary<string, IMcpConnection> _connections = new();
     private readonly Dictionary<string, string> _failed = new();
-    private int _nextId = 1;
+
+    // On-demand servers are shared by whoever needs them at the same time (a
+    // /rea turn and the REA menu item, say). Each user takes a lease, and the
+    // server is stopped when the last lease is given back. The semaphore keeps
+    // two users from starting it twice, or one from stopping it under the other.
+    private readonly SemaphoreSlim _leaseLock = new(1, 1);
+    private readonly Dictionary<string, int> _leases = new();
 
     public event Action<string, string>? Log;      // (server, message)
     public event Action? ToolsChanged;
 
-    public IReadOnlyCollection<string> ConnectedServers => _connections.Keys;
+    public IReadOnlyCollection<string> ConnectedServers
+    {
+        get { lock (_connections) return _connections.Keys.ToArray(); }
+    }
 
     /// <summary>The servers that would not start, and why.</summary>
-    public IReadOnlyDictionary<string, string> FailedServers => _failed;
+    public IReadOnlyDictionary<string, string> FailedServers
+    {
+        get { lock (_failed) return new Dictionary<string, string>(_failed); }
+    }
 
     public async Task ConnectAllAsync(AppConfig cfg, CancellationToken ct = default)
     {
@@ -37,17 +51,9 @@ internal sealed class McpHub : IAsyncDisposable
 
             try
             {
-                IMcpConnection? conn = def.Transport switch
-                {
-                    "stdio" => await StdioMcpClient.ConnectAsync(name, def, ct).ConfigureAwait(false),
-                    "streamable-http" or "http" => new HttpMcpClient(name, def),
-                    _ => null
-                };
+                var (conn, tools) = await OpenAsync(name, def, ct).ConfigureAwait(false);
                 if (conn is null) continue;
-
-                _connections[name] = conn;
-                _failed.Remove(name);
-                var tools = await conn.ListToolsAsync(ct).ConfigureAwait(false);
+                await RegisterAsync(name, conn).ConfigureAwait(false);
                 Log?.Invoke(name, $"connected - {tools.Count} tools");
             }
             catch (Exception e)
@@ -55,7 +61,7 @@ internal sealed class McpHub : IAsyncDisposable
                 // The server is remembered, so it can be tried again. The Blender
                 // server is only listening while Blender is open, and it is not
                 // a fault of the app that Blender was not open when it started.
-                _failed[name] = e.Message;
+                lock (_failed) _failed[name] = e.Message;
                 Log?.Invoke(name, $"connect failed: {e.Message}");
             }
         }
@@ -77,26 +83,20 @@ internal sealed class McpHub : IAsyncDisposable
     /// <returns>the names of the servers that came up.</returns>
     public async Task<IReadOnlyList<string>> RetryFailedAsync(AppConfig cfg, CancellationToken ct = default)
     {
-        if (_failed.Count == 0) return Array.Empty<string>();
+        string[] failed;
+        lock (_failed) failed = _failed.Keys.ToArray();
+        if (failed.Length == 0) return Array.Empty<string>();
 
         var cameUp = new List<string>();
-        foreach (var name in _failed.Keys.ToList())
+        foreach (var name in failed)
         {
             if (!cfg.Mcp.Servers.TryGetValue(name, out var def)) continue;
 
             try
             {
-                IMcpConnection? conn = def.Transport switch
-                {
-                    "stdio" => await StdioMcpClient.ConnectAsync(name, def, ct).ConfigureAwait(false),
-                    "streamable-http" or "http" => new HttpMcpClient(name, def),
-                    _ => null
-                };
+                var (conn, tools) = await OpenAsync(name, def, ct).ConfigureAwait(false);
                 if (conn is null) continue;
-
-                var tools = await conn.ListToolsAsync(ct).ConfigureAwait(false);
-                _connections[name] = conn;
-                _failed.Remove(name);
+                await RegisterAsync(name, conn).ConfigureAwait(false);
                 cameUp.Add(name);
                 Log?.Invoke(name, $"connected - {tools.Count} tools");
             }
@@ -104,7 +104,7 @@ internal sealed class McpHub : IAsyncDisposable
             {
                 // Still not there. The message is kept, but it is not logged
                 // every time, or the app log would fill with the same line.
-                _failed[name] = e.Message;
+                lock (_failed) _failed[name] = e.Message;
             }
         }
 
@@ -124,26 +124,14 @@ internal sealed class McpHub : IAsyncDisposable
     {
         try
         {
-            IMcpConnection? conn = def.Transport switch
-            {
-                "stdio" => await StdioMcpClient.ConnectAsync(name, def, ct).ConfigureAwait(false),
-                "streamable-http" or "http" => new HttpMcpClient(name, def),
-                _ => null
-            };
+            var (conn, tools) = await OpenAsync(name, def, ct).ConfigureAwait(false);
             if (conn is null)
             {
                 Log?.Invoke(name, $"connect failed: unknown transport '{def.Transport}'");
                 return -1;
             }
 
-            // The catalogue is read before the connection is kept, so a server
-            // that starts but never answers is not left registered as connected.
-            List<McpTool> tools;
-            try { tools = await conn.ListToolsAsync(ct).ConfigureAwait(false); }
-            catch { await conn.DisposeAsync().ConfigureAwait(false); throw; }
-
-            if (_connections.TryGetValue(name, out var old)) await old.DisposeAsync().ConfigureAwait(false);
-            _connections[name] = conn;
+            await RegisterAsync(name, conn).ConfigureAwait(false);
             Log?.Invoke(name, $"connected - {tools.Count} tools");
             ToolsChanged?.Invoke();
             return tools.Count;
@@ -156,31 +144,109 @@ internal sealed class McpHub : IAsyncDisposable
     }
 
     /// <summary>
-    /// Connects a server if it is not connected yet. This is how an on-demand
-    /// server is started.
+    /// Starts a server and reads its catalogue. The connection is handed back
+    /// only when both worked: a server that starts but does not answer is
+    /// stopped here, so a failed attempt never leaves a process behind.
     /// </summary>
-    /// <returns>true when the server is connected.</returns>
-    public async Task<bool> EnsureConnectedAsync(AppConfig cfg, string name, CancellationToken ct = default)
+    private static async Task<(IMcpConnection? Conn, List<McpTool> Tools)> OpenAsync(
+        string name, McpServerDef def, CancellationToken ct)
     {
-        if (_connections.ContainsKey(name)) return true;
-        if (!cfg.Mcp.Servers.TryGetValue(name, out var def)) return false;
-        return await ConnectOneAsync(name, def, ct).ConfigureAwait(false) >= 0;
+        IMcpConnection? conn = def.Transport switch
+        {
+            "stdio" => await StdioMcpClient.ConnectAsync(name, def, ct).ConfigureAwait(false),
+            "streamable-http" or "http" => new HttpMcpClient(name, def),
+            _ => null
+        };
+        if (conn is null) return (null, new List<McpTool>());
+
+        try
+        {
+            return (conn, await conn.ListToolsAsync(ct).ConfigureAwait(false));
+        }
+        catch
+        {
+            await conn.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
-    /// <summary>Stops one server and forgets it, so its process lets go of its memory.</summary>
-    public async Task DisconnectAsync(string name)
+    /// <summary>Keeps a connection that answered, and stops the one it replaces.</summary>
+    private async Task RegisterAsync(string name, IMcpConnection conn)
     {
-        if (!_connections.Remove(name, out var conn)) return;
-        try { await conn.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception e) { Log?.Invoke(name, $"disconnect failed: {e.Message}"); }
-        Log?.Invoke(name, "disconnected");
+        IMcpConnection? old;
+        lock (_connections)
+        {
+            _connections.Remove(name, out old);
+            _connections[name] = conn;
+        }
+        lock (_failed) _failed.Remove(name);
+        if (old is not null) await old.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Takes a lease on a server, starting it if nobody is using it. This is how
+    /// an on-demand server is started. Every successful call must be matched by
+    /// <see cref="ReleaseAsync"/>.
+    /// </summary>
+    /// <returns>true when the server is connected and the lease is held.</returns>
+    public async Task<bool> AcquireAsync(AppConfig cfg, string name, CancellationToken ct = default)
+    {
+        await _leaseLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            bool connected;
+            lock (_connections) connected = _connections.ContainsKey(name);
+            if (!connected)
+            {
+                if (!cfg.Mcp.Servers.TryGetValue(name, out var def)) return false;
+                if (await ConnectOneAsync(name, def, ct).ConfigureAwait(false) < 0) return false;
+            }
+
+            _leases[name] = _leases.GetValueOrDefault(name) + 1;
+            return true;
+        }
+        finally { _leaseLock.Release(); }
+    }
+
+    /// <summary>
+    /// Gives a lease back. The last one out stops the server, so its process
+    /// lets go of its memory.
+    /// </summary>
+    public async Task ReleaseAsync(string name)
+    {
+        await _leaseLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var left = _leases.GetValueOrDefault(name) - 1;
+            if (left > 0) { _leases[name] = left; return; }
+
+            _leases.Remove(name);
+            IMcpConnection? conn;
+            lock (_connections) _connections.Remove(name, out conn);
+            if (conn is null) return;
+
+            try { await conn.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception e) { Log?.Invoke(name, $"disconnect failed: {e.Message}"); }
+            Log?.Invoke(name, "disconnected");
+        }
+        finally { _leaseLock.Release(); }
         ToolsChanged?.Invoke();
+    }
+
+    private KeyValuePair<string, IMcpConnection>[] Snapshot()
+    {
+        lock (_connections) return _connections.ToArray();
+    }
+
+    private IMcpConnection? Find(string name)
+    {
+        lock (_connections) return _connections.GetValueOrDefault(name);
     }
 
     public async Task<List<McpTool>> ListAllToolsAsync(CancellationToken ct = default)
     {
         var all = new List<McpTool>();
-        foreach (var (name, conn) in _connections)
+        foreach (var (name, conn) in Snapshot())
         {
             all.AddRange(await ListOneAsync(name, conn, ct).ConfigureAwait(false));
         }
@@ -200,7 +266,8 @@ internal sealed class McpHub : IAsyncDisposable
         var all = new List<McpTool>();
         foreach (var name in servers)
         {
-            if (!_connections.TryGetValue(name, out var conn)) continue;
+            var conn = Find(name);
+            if (conn is null) continue;
             all.AddRange(await ListOneAsync(name, conn, ct).ConfigureAwait(false));
         }
         return all;
@@ -224,8 +291,8 @@ internal sealed class McpHub : IAsyncDisposable
 
     public async Task<string> CallToolAsync(string server, string tool, JsonElement arguments, CancellationToken ct = default)
     {
-        if (!_connections.TryGetValue(server, out var conn))
-            return $"[error] unknown MCP server '{server}'";
+        var conn = Find(server);
+        if (conn is null) return $"[error] unknown MCP server '{server}'";
         try
         {
             var result = await conn.CallToolAsync(tool, arguments, ct).ConfigureAwait(false);
@@ -240,8 +307,8 @@ internal sealed class McpHub : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var conn in _connections.Values) await conn.DisposeAsync().ConfigureAwait(false);
-        _connections.Clear();
+        foreach (var (_, conn) in Snapshot()) await conn.DisposeAsync().ConfigureAwait(false);
+        lock (_connections) _connections.Clear();
     }
 
     internal interface IMcpConnection : IAsyncDisposable
@@ -293,16 +360,25 @@ internal sealed class McpHub : IAsyncDisposable
             var proc = Process.Start(psi) ?? throw new InvalidOperationException("failed to start MCP server");
             var client = new StdioMcpClient(name, proc, def.ToolTimeoutMs);
 
-            var init = await client.RequestAsync("initialize", new
+            // A server that starts but does not finish the handshake is stopped
+            // here: nobody else holds the client yet, so nobody else could.
+            try
             {
-                protocolVersion = "2024-11-05",
-                capabilities = new { },
-                clientInfo = new { name = "notecode", version = "0.1.0" }
-            }, ct).ConfigureAwait(false);
+                await client.RequestAsync("initialize", new
+                {
+                    protocolVersion = "2024-11-05",
+                    capabilities = new { },
+                    clientInfo = new { name = "notecode", version = "0.1.0" }
+                }, ct).ConfigureAwait(false);
 
-            await client.NotifyAsync("notifications/initialized", new { }, ct).ConfigureAwait(false);
-            _ = init;
-            return client;
+                await client.NotifyAsync("notifications/initialized", new { }, ct).ConfigureAwait(false);
+                return client;
+            }
+            catch
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
 
         private async Task ReadLoopAsync()
@@ -319,12 +395,15 @@ internal sealed class McpHub : IAsyncDisposable
                     try { root = JsonDocument.Parse(line).RootElement.Clone(); }
                     catch (JsonException) { continue; }
 
-                    TaskCompletionSource<JsonElement>? tcs = null;
                     if (root.TryGetProperty("id", out var idEl) && idEl.TryGetInt32(out var id))
                     {
-                        lock (_pending) _pending.Remove(id, out tcs);
+                        // Completed under the lock the timeout takes too, so a
+                        // response and a timeout cannot both claim one request.
+                        lock (_pending)
+                        {
+                            if (_pending.Remove(id, out var tcs)) tcs.TrySetResult(root);
+                        }
                     }
-                    tcs?.TrySetResult(root);
                 }
             }
             catch (OperationCanceledException) { }
@@ -351,22 +430,47 @@ internal sealed class McpHub : IAsyncDisposable
             };
             if (@params is not null) payload["params"] = @params;
 
-            await WriteAsync(JsonSerializer.Serialize(payload), ct).ConfigureAwait(false);
-
-            // A server that never answers must not hold the turn forever.
+            // A server that never answers must not hold the turn forever. The
+            // clock starts before the write: a server that stops reading its
+            // stdin blocks the write itself.
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(_timeout);
             using var reg = timeout.Token.Register(() =>
             {
-                lock (_pending) _pending.Remove(id);
-                if (ct.IsCancellationRequested) tcs.TrySetCanceled(ct);
-                else tcs.TrySetException(new TimeoutException($"MCP server '{_name}' did not answer {method} within {_timeout.TotalSeconds:0} s"));
+                lock (_pending)
+                {
+                    // Whoever removes the request completes it. If the response
+                    // already did, the timeout has nothing left to say.
+                    if (!_pending.Remove(id)) return;
+                    if (ct.IsCancellationRequested) tcs.TrySetCanceled(ct);
+                    else tcs.TrySetException(TimedOut(method));
+                }
             });
-            var response = await tcs.Task.ConfigureAwait(false);
+
+            JsonElement response;
+            try
+            {
+                await WriteAsync(JsonSerializer.Serialize(payload), timeout.Token).ConfigureAwait(false);
+                response = await tcs.Task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw TimedOut(method);
+            }
+            finally
+            {
+                // A write that failed never reached the server, so nothing
+                // will ever answer it.
+                lock (_pending) _pending.Remove(id);
+            }
+
             if (response.TryGetProperty("error", out var err))
                 throw new InvalidOperationException($"MCP error: {err.GetRawText()}");
             return response.TryGetProperty("result", out var result) ? result : default;
         }
+
+        private TimeoutException TimedOut(string method) =>
+            new($"MCP server '{_name}' did not answer {method} within {_timeout.TotalSeconds:0} s");
 
         private async Task NotifyAsync(string method, object? @params, CancellationToken ct)
         {
@@ -384,10 +488,19 @@ internal sealed class McpHub : IAsyncDisposable
             await _writeLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                await _proc.StandardInput.WriteAsync(line + "\n").ConfigureAwait(false);
-                await _proc.StandardInput.FlushAsync().ConfigureAwait(false);
+                // The process pipes are not opened for overlapped I/O, so a
+                // cancelled token does not interrupt a write that is blocked on
+                // a full pipe. WaitAsync stops waiting for it instead.
+                var write = WriteLineAsync(line);
+                await write.WaitAsync(ct).ConfigureAwait(false);
             }
             finally { _writeLock.Release(); }
+        }
+
+        private async Task WriteLineAsync(string line)
+        {
+            await _proc.StandardInput.WriteAsync(line + "\n").ConfigureAwait(false);
+            await _proc.StandardInput.FlushAsync().ConfigureAwait(false);
         }
 
         public async Task<List<McpTool>> ListToolsAsync(CancellationToken ct)
@@ -440,18 +553,26 @@ internal sealed class McpHub : IAsyncDisposable
         private readonly string _name;
         private readonly McpServerDef _def;
         private readonly HttpClient _http;
+        private readonly TimeSpan _timeout;
         private int _nextId = 1;
         private string? _sessionId;
+        private List<McpTool>? _tools;
 
         public HttpMcpClient(string name, McpServerDef def)
         {
             _name = name;
             _def = def;
-            _http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+            _timeout = TimeSpan.FromMilliseconds(def.ToolTimeoutMs > 0 ? def.ToolTimeoutMs : 60000);
+
+            // The per-server timeout is applied to each request, so the client
+            // itself has none.
+            _http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         }
 
         public async Task<List<McpTool>> ListToolsAsync(CancellationToken ct)
         {
+            if (_tools is not null) return _tools;
+
             var result = await RequestAsync("tools/list", new { }, ct).ConfigureAwait(false);
             var list = new List<McpTool>();
             if (result.ValueKind == JsonValueKind.Object &&
@@ -467,6 +588,7 @@ internal sealed class McpHub : IAsyncDisposable
                         t.TryGetProperty("inputSchema", out var s) ? s.Clone() : default));
                 }
             }
+            _tools = list;
             return list;
         }
 
@@ -495,11 +617,25 @@ internal sealed class McpHub : IAsyncDisposable
             req.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/event-stream"));
             if (_sessionId is not null) req.Headers.TryAddWithoutValidation("Mcp-Session-Id", _sessionId);
 
-            using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(_timeout);
+
+            HttpResponseMessage resp;
+            string body;
+            try
+            {
+                resp = await _http.SendAsync(req, timeout.Token).ConfigureAwait(false);
+                body = await resp.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException($"MCP server '{_name}' did not answer {method} within {_timeout.TotalSeconds:0} s");
+            }
+
+            using var _ = resp;
             if (resp.Headers.TryGetValues("Mcp-Session-Id", out var sid))
                 _sessionId = sid.FirstOrDefault();
 
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
                 throw new InvalidOperationException($"HTTP {(int)resp.StatusCode}: {body}");
 

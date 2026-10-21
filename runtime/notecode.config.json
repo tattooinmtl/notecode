@@ -112,6 +112,8 @@
         "args": ["/d", "/c", "npx", "-y", "rea-agents@6.4.0", "mcp"],
         "toolTimeoutMs": 600000,
         "onDemand": true,
+        "localTools": ["open_binary", "binary_overview", "binary_session", "list_procedures", "search_procedures", "procedure_info", "procedure_pseudo_code", "procedure_callers", "procedure_callees", "xrefs", "search_strings", "list_strings", "list_segments", "analyze_function", "get_call_graph", "inspect_artifact", "close_binary"],
+        "$comment_localTools": "The 170 REA schemas are 111,434 tokens, far over the local context. The local model is offered these first (about 4,800 tokens), then the smallest of the rest, up to 45% of the context. A BYOK provider gets all of them.",
         "description": "REA reverse-engineering agent (170 tools). Same wiring kimi-code already uses. On demand: started by /rea only, stopped when that turn ends, and not in mcp-servers.json, so llama-server never spawns it."
       },
       "blender": {

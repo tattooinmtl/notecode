@@ -11,7 +11,7 @@
 // and then RUNS times warm. Decode is a fixed 128 tokens (ignore_eos), so the
 // rates compare like with like.
 //
-//   node scripts/bench-turn.mjs [label] [baseUrl] [shapes, e.g. bare,lean]
+//   node scripts/bench-turn.mjs [label] [baseUrl] [shapes, default bare,lean]
 //
 // The old shape is about 13k tokens and does not fit a 12288 context, so run
 // it only against a server with a larger --ctx-size.
@@ -77,10 +77,18 @@ function post(url, body) {
   });
 }
 
-const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+// One cold and RUNS warm samples is an even count, so the two middle values
+// are averaged rather than the upper one taken.
+const median = (xs) => {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
 const results = {};
 
-const only = process.argv[4] ? process.argv[4].split(',') : Object.keys(shapes);
+// The old shape is left out by default: it is about 13k tokens and does not
+// fit the 12288 context this repo configures.
+const only = process.argv[4] ? process.argv[4].split(',') : ['bare', 'lean'];
 
 for (const [name, shape] of Object.entries(shapes).filter(([n]) => only.includes(n))) {
   const cold = await ask(shape, true);

@@ -170,6 +170,13 @@ internal sealed class MainForm : Form
     /// </summary>
     private readonly List<ChatMessage> _chatHistory = new();
 
+    /// <summary>
+    /// Bumped whenever the conversation is cleared or replaced. A turn remembers
+    /// the value it started under, and a turn that finishes under another one
+    /// belongs to a conversation that is gone, so it writes nothing back.
+    /// </summary>
+    private int _conversationEpoch;
+
     // The prompt budget of a chat turn with the local model. Context is costly on a
     // CPU twice over: once to prefill it, and again on every token decoded, because
     // the model attends over all of it. These keep an ordinary turn near 2k tokens.
@@ -1840,7 +1847,7 @@ internal sealed class MainForm : Form
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
         AppendAi($"[notecode] REA analyzing {dlg.FileName} ...");
-        if (!await _mcp.EnsureConnectedAsync(_cfg, "rea"))
+        if (!await _mcp.AcquireAsync(_cfg, "rea"))
         {
             AppendAi("[notecode] the REA MCP server would not start.");
             return;
@@ -1861,7 +1868,7 @@ internal sealed class MainForm : Form
         }
         finally
         {
-            await _mcp.DisconnectAsync("rea");
+            await _mcp.ReleaseAsync("rea");
             UpdateMcpStatus();
         }
     }
@@ -2011,7 +2018,7 @@ capabilities = [ ""tool_use"" ]
             case "fontsize": CmdFontSize(cmd.Arguments); break;
             case "tools": await CmdToolsAsync(); break;
             case "context": CmdContext(cmd.Arguments); break;
-            case "clear": _chat.Clear(); _chatHistory.Clear(); break;
+            case "clear": _chat.Clear(); ForgetConversation(); break;
             case "status": await CmdStatusAsync(); break;
             default:
                 _chat.Note($"There is no command called `{cmd.Name}`. Type `/help` for the list.", "notecode");
@@ -2067,7 +2074,7 @@ capabilities = [ ""tool_use"" ]
         // the turn is over. Nothing else starts it, so its 170 tools and its
         // node process cost nothing outside a /rea turn.
         _chat.Activity("think", "Starting the REA server");
-        if (!await _mcp.EnsureConnectedAsync(_cfg, "rea"))
+        if (!await _mcp.AcquireAsync(_cfg, "rea"))
         {
             _reaRequest = null;
             _chat.Note("The REA server would not start. See the MCP lines in the log.", "notecode · rea");
@@ -2090,7 +2097,7 @@ capabilities = [ ""tool_use"" ]
         finally
         {
             _reaRequest = null;
-            await _mcp.DisconnectAsync("rea");
+            await _mcp.ReleaseAsync("rea");
             BeginInvoke(UpdateMcpStatus);
         }
     }
@@ -3401,6 +3408,7 @@ capabilities = [ ""tool_use"" ]
         var ct = _chatCts.Token;
 
         IChatBackend backend = CreateBackend();
+        var epoch = _conversationEpoch;
 
         var tools = _aiTools.Checked
             ? await GetToolSpecsAsync(includeRea, ct)
@@ -3416,11 +3424,15 @@ capabilities = [ ""tool_use"" ]
         // reuses the longest unchanged opening of the prompt, and the buffer only
         // changes when the file does, while the history grows every turn. After
         // the history, the buffer would be read again on every turn.
-        if (_aiContext.Checked && _currentPath is not null && File.Exists(_currentPath))
+        if (_aiContext.Checked && _currentPath is not null)
         {
             try
             {
-                var content = await File.ReadAllTextAsync(_currentPath);
+                // The editor's own buffer, so unsaved edits are what the model
+                // sees. The file on disk is the fallback when the page does not
+                // answer in time.
+                var (live, _, content) = await RequestEditorBufferAsync(2000);
+                if (!live) content = File.Exists(_currentPath) ? await File.ReadAllTextAsync(_currentPath) : "";
                 if (content.Length > EditorContextChars)
                 {
                     content = content[..EditorContextChars] +
@@ -3462,7 +3474,7 @@ capabilities = [ ""tool_use"" ]
         try
         {
             var answer = await RunToolLoopAsync(messages, tools, backend, ct);
-            if (!string.IsNullOrEmpty(answer))
+            if (!string.IsNullOrEmpty(answer) && epoch == _conversationEpoch)
             {
                 _chatHistory.Add(new ChatMessage("user", Truncate(prompt, HistoryMessageChars)));
                 _chatHistory.Add(new ChatMessage("assistant", Truncate(answer, HistoryMessageChars)));
@@ -3477,6 +3489,17 @@ capabilities = [ ""tool_use"" ]
         {
             AppendAi($"[error] {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Forgets the conversation the model is given back. A turn that is still
+    /// running is cancelled: it belongs to the conversation that was cleared.
+    /// </summary>
+    private void ForgetConversation()
+    {
+        _conversationEpoch++;
+        _chatCts?.Cancel();
+        _chatHistory.Clear();
     }
 
     /// <summary>
@@ -3648,6 +3671,7 @@ capabilities = [ ""tool_use"" ]
         List<ChatMessage> messages, List<ToolSpec> tools, IChatBackend backend, CancellationToken ct)
     {
         const int MaxTurns = 8;
+        var offered = new HashSet<string>(tools.Select(t => t.Name), StringComparer.Ordinal);
 
         for (int turn = 0; turn < MaxTurns; turn++)
         {
@@ -3678,13 +3702,37 @@ capabilities = [ ""tool_use"" ]
                     maxTokens: _cfg.Llama.Agent.MaxTokens, ct: ct)
                 : await backend.StreamTurnAsync(messages, tools, onDelta, ct, onReasoning);
 
+            // A conversation cleared while the model was writing is gone, and
+            // this answer must not land in the one that replaced it.
+            ct.ThrowIfCancellationRequested();
+
+            // Only the local cap is ours to name. A provider that stops at its
+            // own limit says "length" too, and so does a local server with no cap.
+            var capped = result.FinishReason == "length";
+            var ourCap = capped && backend is LlamaServer && _cfg.Llama.Agent.MaxTokens > 0;
+            var capNote = ourCap
+                ? $"the {_cfg.Llama.Agent.MaxTokens}-token cap (llama.agent.maxTokens)"
+                : "the model's output limit";
+
             if (result.ToolCalls.Count == 0)
             {
                 if (result.Content.Length == 0) { _chat.Assistant("(no output)"); Record("assistant", "(no output)"); }
                 else { _chat.Assistant(result.Content); Record("assistant", result.Content); }
-                if (result.FinishReason == "length")
-                    AppendAi($"[notecode] the answer hit the {_cfg.Llama.Agent.MaxTokens}-token cap (llama.agent.maxTokens).", "warn");
+                if (capped) AppendAi($"[notecode] the answer hit {capNote}.", "warn");
                 return result.Content;
+            }
+
+            // A tool call cut off by the limit has half its arguments: a save_as
+            // that stops in the middle of the file. Running it would write a
+            // broken file or fail on the JSON, so it is not run at all.
+            if (capped)
+            {
+                if (result.Content.Length > 0) { _chat.Assistant(result.Content); Record("assistant", result.Content); }
+                AppendAi(
+                    $"[notecode] the model hit {capNote} in the middle of a tool call " +
+                    $"({string.Join(", ", result.ToolCalls.Select(c => c.Name))}), so it was not run." +
+                    (ourCap ? " Raise llama.agent.maxTokens, or ask for a smaller piece." : ""), "warn");
+                return null;
             }
 
             // Keep the assistant turn that asked for the tools, so the template can render the
@@ -3698,7 +3746,18 @@ capabilities = [ ""tool_use"" ]
                 var (kind, label) = DescribeTool(call.Name, call.ArgumentsJson);
                 _chat.Activity(kind, label);
 
-                var output = await backend.InvokeToolAsync(call.Name, call.ArgumentsJson, ct);
+                // Only a tool this turn offered is run. The model can name any tool
+                // it has heard of - from the user, a file, a tool result - and a
+                // name it was not given is refused rather than dispatched.
+                // Some models drop the server prefix (save_as for notecode_save_as),
+                // so a bare name that matches exactly one offered tool is that tool.
+                var name = offered.Contains(call.Name)
+                    ? call.Name
+                    : offered.Where(o => o.EndsWith("_" + call.Name, StringComparison.Ordinal))
+                             .ToArray() is [var only] ? only : null;
+                var output = name is not null
+                    ? await backend.InvokeToolAsync(name, call.ArgumentsJson, ct)
+                    : $"[error] {call.Name} is not one of the tools offered in this turn.";
                 _chat.Tool(call.Name, Truncate(call.ArgumentsJson, 1200), output);
                 Record("tool", $"{call.Name}\n{Truncate(output, 600)}");
 
@@ -3767,7 +3826,51 @@ capabilities = [ ""tool_use"" ]
         // own client as well (see LlamaServer.Dispatch), since llama-server
         // does not run REA any more.
         var rea = ToToolSpecs(await _mcp.ListToolsAsync(new[] { "rea" }, ct));
+        if (_providers.ActiveProvider().IsLocal) rea = FitToContext(rea, _cfg.Mcp.Servers.GetValueOrDefault("rea"));
         return baseSpecs.Concat(rea).ToList();
+    }
+
+    /// <summary>
+    /// The part of a big catalogue that fits the local model's context.
+    ///
+    /// The 170 REA schemas are 111,434 tokens (measured with the server's own
+    /// tokenizer), nine times the 12,288 context. The server's preferred tools
+    /// (<see cref="McpServerDef.LocalTools"/>) go first, in the order listed, and
+    /// then the smallest of the rest, until the schemas take 45% of the context.
+    /// The rest of the context is left for the prompt, the tool results and the
+    /// answer.
+    /// </summary>
+    private List<ToolSpec> FitToContext(List<ToolSpec> specs, McpServerDef? def)
+    {
+        // Compact JSON schemas run at about 3.96 characters a token on this
+        // tokenizer; 3.5 leaves a margin.
+        static int Tokens(ToolSpec s) => (int)Math.Ceiling(s.Definition.GetRawText().Length / 3.5);
+
+        var budget = (int)(_cfg.Llama.Context.CtxSize * 0.45);
+        var preferred = def?.LocalTools ?? new List<string>();
+        var ordered = preferred
+            .Select(n => specs.FirstOrDefault(s => s.Name == "rea_" + n || s.Name == n))
+            .OfType<ToolSpec>()
+            .Concat(specs.Where(s => !preferred.Any(n => s.Name == "rea_" + n || s.Name == n)).OrderBy(Tokens));
+
+        var kept = new List<ToolSpec>();
+        var used = 0;
+        foreach (var spec in ordered)
+        {
+            var cost = Tokens(spec);
+            if (used + cost > budget) continue;
+            kept.Add(spec);
+            used += cost;
+        }
+
+        if (kept.Count < specs.Count)
+        {
+            _chat.Note(
+                $"The local model gets {kept.Count} of the {specs.Count} REA tools (about {used:N0} tokens of " +
+                $"schemas). All of them are {specs.Sum(Tokens):N0} tokens, more than its {_cfg.Llama.Context.CtxSize:N0}-token " +
+                "context. A provider with a larger context gets the whole set.", "notecode · rea");
+        }
+        return kept;
     }
 
     /// <summary>
@@ -3815,12 +3918,17 @@ capabilities = [ ""tool_use"" ]
             .Where(s => toolName.StartsWith(s + "_", StringComparison.Ordinal))
             .OrderByDescending(s => s.Length)
             .FirstOrDefault();
-        if (owner is not null)
+        var bare = owner is null ? "" : toolName[(owner.Length + 1)..];
+
+        // The server has to publish the tool. The catalogue is cached per
+        // connection, so this costs nothing after the first call.
+        if (owner is not null &&
+            (await _mcp.ListToolsAsync(new[] { owner }, ct)).Any(t => t.Name == bare))
         {
             try
             {
                 using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
-                return (true, await _mcp.CallToolAsync(owner, toolName[(owner.Length + 1)..], doc.RootElement.Clone(), ct));
+                return (true, await _mcp.CallToolAsync(owner, bare, doc.RootElement.Clone(), ct));
             }
             catch (Exception ex)
             {
@@ -4034,7 +4142,7 @@ capabilities = [ ""tool_use"" ]
 
         lock (_transcript) { _transcript.Clear(); }
         lock (_sessionMessages) { _sessionMessages.Clear(); }
-        _chatHistory.Clear();
+        ForgetConversation();
         _chat.Clear();
         AppendAi("[notecode] new session.", "ok");
     }
@@ -4064,7 +4172,7 @@ capabilities = [ ""tool_use"" ]
     {
         lock (_transcript) { _transcript.Clear(); }
         lock (_sessionMessages) { _sessionMessages.Clear(); }
-        _chatHistory.Clear();
+        ForgetConversation();
         _chat.Clear();
 
         if (_session is null) return;

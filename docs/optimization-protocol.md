@@ -122,19 +122,19 @@ within 5% of the no-tools probe.
 ## 5. Measured result — Stages 1 + 2 applied (2026-10-21)
 
 `node scripts/bench-turn.mjs <label> http://127.0.0.1:8080 [shapes]`: 1 cold + 3 warm runs, 128
-decoded tokens each (ignore_eos, temperature 0), median shown.
+decoded tokens each (ignore_eos, temperature 0), median shown (the mean of the two middle runs, as there are four).
 
 | Server | Prompt shape | Prompt tokens | Cold prefill | Decode (median) |
 |---|---|---|---|---|
 | before (ctx 32k, 16 threads, mmproj, 4 MCP servers incl. REA) | bare | 56 | 1.3 s | 10.78 tok/s |
 | before | **old** (26 tools, 40k-char buffer) | **13,248** | **433 s** | **6.96 tok/s** |
-| before | lean (10 tools, 6k-char buffer) | 3,709 | 85 s | 9.42 tok/s |
-| **after** (ctx 12k, 8 threads, no mmproj, notecode MCP only, cache-reuse) | bare | 56 | 1.6 s | **12.25 tok/s** |
-| **after** | **lean** | **3,709** | 92 s | **10.11 tok/s** |
+| before | lean (10 tools, 6k-char buffer) | 3,709 | 85 s | 9.25 tok/s |
+| **after** (ctx 12k, 8 threads, no mmproj, notecode MCP only, cache-reuse) | bare | 56 | 1.6 s | **12.12 tok/s** |
+| **after** | **lean** | **3,709** | 92 s | **10.09 tok/s** |
 
-- A real turn went from **6.96 → 10.11 tok/s** (+45%), with 72% fewer prompt tokens and a 4.7×
+- A real turn went from **6.96 → 10.09 tok/s** (+45%), with 72% fewer prompt tokens and a 4.7×
   shorter cold prefill.
-- The server settings alone are worth about 14% (bare probe 10.78 → 12.25).
+- The server settings alone are worth about 12% on the bare probe (10.78 → 12.12) and 9% on the lean prompt (9.25 → 10.09).
 - The old shape (13,248 tokens) does not fit the new 12,288 context. That is intended: the app no
   longer builds a prompt that size.
 - The server starts in 8 s (it used to wait up to 180 s for the npx prime), and `/tools` lists 26
@@ -143,3 +143,15 @@ decoded tokens each (ignore_eos, temperature 0), median shown.
   the cache. The remaining lever is the editor buffer (~1.7k of the 3.7k tokens): turn it off by
   default and let the model call `notecode_get_editor_buffer`, which brings a cold turn to ~2k
   tokens and ~50 s.
+
+## 6. REA on the local model
+
+Measured with the server's tokenizer: the 170 REA tool schemas are **111,434 tokens**. The largest
+single tool (`compare_web_captures`) is 15,535 tokens. That is more than 3× the old 32k context, so
+`/rea` on the local model never fit, before or after this work. Before the on-demand fix, it also
+made every later turn overflow.
+
+The local model now gets the tools in `mcp.servers.rea.localTools` (17 core analysis tools,
+about 4,800 tokens), then the smallest of the rest, up to 45% of the context. With the chat tools
+that comes to **6,914 prompt tokens** of the 12,288 context (verified on the server). A BYOK
+provider still gets the whole set.
