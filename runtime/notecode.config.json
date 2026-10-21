@@ -1,0 +1,171 @@
+{
+  "$comment": "Single source of truth for notecode.exe. Edited by hand; every component reads this file.",
+
+  "llama": {
+    "$comment": "llama.cpp server. Build selection rationale in docs/DESIGN.md.",
+    "serverExe": "C:\\Llama\\llama.cpp\\build-notecode\\bin\\Release\\llama-server.exe",
+    "serverDir": "C:\\Llama\\llama.cpp\\build-notecode\\bin\\Release",
+    "model": "C:\\models\\MiniCPM-V-4_7-35B-A3B-Q4_K_M.gguf",
+    "mmproj": "C:\\models\\mmproj-model-f16.gguf",
+    "$comment_mmproj": "The vision projector that goes with the MiniCPM-V model. It is what lets the model see an image; without it the server refuses any request that carries one. There is a second projector in C:\\models (mmproj-Qwythos-27B-F16.gguf) that belongs to the Qwythos-27B model, not this one.",
+    "host": "127.0.0.1",
+    "port": 8080,
+    "alias": "notecode-minicpm",
+    "$comment_builds": "One llama.cpp build per backend. A llama-server.exe is compiled for exactly one backend, so the GPU version and the CPU version are two different files. The hardware scan picks the key; the key picks the executable. A build whose exe is missing is not an error - it is simply not offered. runtime/build-llama-gpu.ps1 compiles the extra ones.",
+
+    "cpu": {
+      "device": "none",
+      "nGpuLayers": 0,
+      "threads": 16,
+      "threadsBatch": 16,
+      "threadsHttp": 8
+    },
+
+    "context": {
+      "ctxSize": 32768,
+      "cacheTypeK": "q8_0",
+      "cacheTypeV": "q8_0",
+      "parallel": 1,
+      "$comment": "KV bytes/token = 2 * 40 layers * 2 kv_heads * 256 head_dim * bytes_per_elem. f16=80KiB/tok, q8_0=42.5KiB/tok. At ctx 32768 with q8_0 the KV cache is 1.33 GiB."
+    },
+
+    "agent": {
+      "tools": ["read_file", "file_glob_search", "grep_search", "write_file", "edit_file", "get_info", "exec_shell_command"],
+      "$comment": "b10988 built-in tool set is: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info. 'apply_diff' does not exist in this build.",
+      "mcpServersConfig": "mcp-servers.json",
+      "webuiMcpProxy": true,
+      "reasoning": "off",
+      "jinja": true
+    },
+
+    "builds": {
+      "cpu": {
+        "label": "CPU only",
+        "exe": "C:\\Llama\\llama.cpp\\build-notecode\\bin\\Release\\llama-server.exe",
+        "device": "none",
+        "nGpuLayers": 0
+      },
+      "vulkan": {
+        "label": "Vulkan",
+        "exe": "C:\\Llama\\llama.cpp\\build-vulkan\\bin\\Release\\llama-server.exe",
+        "device": "vulkan",
+        "nGpuLayers": 99
+      },
+      "cuda": {
+        "label": "CUDA",
+        "exe": "C:\\Llama\\llama.cpp\\build-cuda\\bin\\Release\\llama-server.exe",
+        "device": "cuda",
+        "nGpuLayers": 99
+      },
+      "metal": {
+        "label": "Metal",
+        "exe": "C:\\Llama\\llama.cpp\\build-metal\\bin\\Release\\llama-server.exe",
+        "device": "metal",
+        "nGpuLayers": 99
+      }
+    },
+
+    "server": {
+      "jinja": true,
+      "slots": true,
+      "corsOrigins": "localhost",
+      "timeoutSeconds": 3600,
+      "noWarmup": false,
+      "logLevel": "info"
+    }
+  },
+
+  "memory": {
+    "$comment": "The 24 GiB allocation is the llama.cpp + gguf envelope only. It does NOT include the OS or other apps.",
+    "budgetGiB": 24,
+    "modelGiB": 19.71,
+    "reserveGiB": 1.0,
+    "warnFreeSystemGiB": 6.0,
+    "$comment": "Physical RAM is 28.9 GiB. Model is 19.71 GiB mmap. Other processes currently hold ~13 GiB, so the system must be at ~6 GiB free before the server can hold its working set without paging."
+  },
+
+  "mcp": {
+    "$comment": "Servers exposed to the model by llama-server --mcp-servers-config, and to the notecode UI by the built-in MCP client.",
+    "servers": {
+      "notecode": {
+        "transport": "stdio",
+        "command": "node",
+        "args": ["C:\\NexusOne\\prototypes\\notecode\\runtime\\notecode-mcp.mjs"],
+        "toolTimeoutMs": 60000,
+        "description": "The AI's file hook. The app talks to it directly, so a BYOK provider can still write files."
+      },
+      "rea": {
+        "transport": "stdio",
+        "command": "cmd.exe",
+        "args": ["/d", "/c", "npx", "-y", "rea-agents@6.4.0", "mcp"],
+        "toolTimeoutMs": 600000,
+        "description": "REA reverse-engineering agent (170 tools). Same wiring kimi-code already uses."
+      },
+      "blender": {
+        "transport": "streamable-http",
+        "url": "http://127.0.0.1:8765/mcp",
+        "description": "Blender MCP addon."
+      },
+      "global-brain": {
+        "transport": "stdio",
+        "command": "brain-system.exe",
+        "args": ["--mcp"],
+        "description": "Global Brain memory vault / session digests. brain-system.exe needs --mcp; without it it starts the tray app and exits."
+      }
+    }
+  },
+
+  "search": {
+    "$comment": "The private GWN search gateway. The endpoint doctor runs it as a command to keep the provider catalogue current.",
+    "server": "C:\\NexusOne\\prototypes\\notecode\\SEARCH_GWN_MCP\\server.mjs",
+    "keyFile": "%USERPROFILE%\\.search-gwn\\omni.key",
+    "category": "it",
+    "$comment2": "category 'it' is the programming corpus (MDN, Stack Overflow) and is right for code questions. The doctor searches in 'general' (the open web) because a vendor's base URL lives on its own docs site: 'MiniMax API base URL' in 'it' returns articles about the URL API, in 'general' it returns the MiniMax docs.",
+    "doctorCategory": "general",
+    "limit": 5
+  },
+
+  "skills": {
+    "$comment": "Folders that hold skills. Each skill is a folder with a SKILL.md in it. /skills lists them, /skill loads one.",
+    "roots": [
+      "%USERPROFILE%\\.brain-skills\\skills",
+      "%USERPROFILE%\\.minimax\\agents\\mavis\\skills"
+    ]
+  },
+
+  "kimi": {
+    "$comment": "kimi-code CLI launched inside the notecode terminal pane.",
+    "exe": "%USERPROFILE%\\.kimi-code\\bin\\kimi.exe",
+    "config": "%USERPROFILE%\\.kimi-code\\config.toml",
+    "mcpConfig": "%USERPROFILE%\\.kimi-code\\mcp.json",
+    "localProvider": {
+      "$comment": "Add to kimi-code config.toml to point kimi at the local llama-server.",
+      "name": "notecode-local",
+      "type": "openai",
+      "base_url": "http://127.0.0.1:8080/v1",
+      "api_key": "notecode-local",
+      "model": "notecode-minicpm",
+      "max_context_size": 32768,
+      "capabilities": ["tool_use"]
+    }
+  },
+
+  "ui": {
+    "$comment": "How big the text is. Microsoft sets 10 point as the floor for WinForms text whose size the user cannot change; here it can be changed, and 1.00 is that floor. /fontsize writes this.",
+    "fontScale": 1.0
+  },
+
+  "editor": {
+    "$comment": "CodeMirror 5 is vendored locally under src/Notecode.App/wwwroot/vendor so the IDE works fully offline.",
+    "mode": "text/x-csrc",
+    "fontFamily": "Cascadia Code, Consolas, monospace",
+    "fontSize": 13,
+    "tabSize": 4,
+    "lineWrapping": false
+  },
+
+  "workspace": {
+    "root": "C:\\NexusOne\\prototypes\\notecode\\workspace",
+    "$comment": "llama-server's working directory. The built-in file tools are scoped to this tree."
+  }
+}

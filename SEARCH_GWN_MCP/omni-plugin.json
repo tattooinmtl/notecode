@@ -1,0 +1,18 @@
+{
+  "name": "search-gwn",
+  "version": "1.0.0",
+  "description": "Private web search through the GWN Search Gateway (SearXNG). /search for the user; the agent's tools come from the search-gwn MCP server (see README).",
+  "commands": [
+    {
+      "name": "search",
+      "usage": "/search <query> [--category it|science|news] [--limit 8]",
+      "summary": "search the web through the private GWN gateway",
+      "run": {
+        "command": "node",
+        "args": ["{{PLUGIN_DIR}}/server.mjs", "--search"],
+        "cwd": "{{PLUGIN_DIR}}",
+        "wait": true
+      }
+    }
+  ]
+}

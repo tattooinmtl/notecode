@@ -1,0 +1,401 @@
+using Notecode.App;
+
+// Headless probe for the assistant -> tool call -> tool result loop.
+//
+// It links the shipping LlamaServer / ChatTools sources, so it exercises the same code the
+// GUI runs - including the streaming tool_call delta parser, which is the part a hand
+// written HTTP test would not cover.
+//
+//   ToolProbe [configPath] [prompt]
+
+if (args.Length == 0)
+{
+    Console.Error.WriteLine("usage: ToolProbe <configPath> [prompt] | --dump-modes <configPath>");
+    return 2;
+}
+
+// Cross-check mode: print the C# view of the shared registry so it can be diffed
+// against the Node view in runtime/notecode-mcp.mjs.
+if (args[0] == "--dump-modes")
+{
+    var cfg0 = AppConfig.Load(args[1]);
+    var types = FileTypes.Load(cfg0.RuntimeDir);
+    var registry = System.Text.Json.JsonDocument.Parse(
+        File.ReadAllText(Path.Combine(cfg0.RuntimeDir, "file-types.json")));
+    var exts = registry.RootElement.GetProperty("modes").EnumerateObject()
+        .Where(p => !p.Name.StartsWith('$'))
+        .Select(p => p.Name)
+        .OrderBy(x => x, StringComparer.Ordinal);
+    foreach (var ext in exts)
+    {
+        Console.WriteLine($"{ext}={types.ModeFor("x." + ext)}");
+    }
+    return 0;
+}
+
+// Hardware scan. The splash screen runs this before the app opens, so it is
+// verified headlessly here: the numbers it prints are the ones that decide which
+// llama.cpp build runs on this machine.
+if (args[0] == "--scan-hardware")
+{
+    var started = System.Diagnostics.Stopwatch.StartNew();
+    var facts = HardwareScanner.Scan();
+    started.Stop();
+
+    Console.WriteLine($"cpu        {facts.CpuName}");
+    Console.WriteLine($"cores      {facts.PhysicalCores} physical / {facts.LogicalProcessors} logical");
+    Console.WriteLine($"memory     {facts.RamGiB:0.0} GiB");
+    Console.WriteLine($"os         {facts.OsName} {facts.Architecture}");
+    var gpu = facts.Gpu;
+    Console.WriteLine($"gpu        {(gpu is null ? "none found" : gpu.FullName)}");
+    Console.WriteLine($"vram       {(gpu is null ? "-" : gpu.VramGiB.ToString("0.0") + " GiB" + (gpu.SharedMemory ? " shared" : ""))}");
+    Console.WriteLine($"source     {(gpu is null ? "-" : gpu.Source)}");
+    Console.WriteLine($"npu        {(facts.HasNpu ? facts.NpuName : "none")}");
+    Console.WriteLine($"scan took  {started.ElapsedMilliseconds} ms");
+
+    // The rule the app follows, checked against what the scan found.
+    var chosen = BackendSelector.Choose(facts);
+    Console.WriteLine($"backend    {BackendSelector.Key(chosen)}  -  {BackendSelector.Reason(facts, chosen)}");
+    Console.WriteLine($"signature  {facts.Signature}");
+
+    var problems = 0;
+    if (facts.CpuName.Length == 0) { Console.Error.WriteLine("FAIL: no processor name"); problems++; }
+    if (facts.RamBytes <= 0) { Console.Error.WriteLine("FAIL: no memory"); problems++; }
+    if (facts.PhysicalCores <= 0) { Console.Error.WriteLine("FAIL: no core count"); problems++; }
+    if (started.ElapsedMilliseconds > 4000) { Console.Error.WriteLine("FAIL: the scan is too slow to show on a splash"); problems++; }
+
+    Console.WriteLine(problems == 0 ? "PASS" : $"FAIL: {problems} problem(s)");
+    return problems == 0 ? 0 : 1;
+}
+
+// Slash command, provider store and GGUF checks. These are the parts of the agent
+// harness that have no HTTP surface, so they are verified headlessly.
+if (args[0] == "--commands")
+{
+    var cfg1 = AppConfig.Load(args[1]);
+    int failures = 0;
+
+    void Check(string name, bool ok, string detail = "")
+    {
+        Console.WriteLine($"  [{(ok ? "PASS" : "FAIL")}] {name}{(detail.Length > 0 ? " - " + detail : "")}");
+        if (!ok) failures++;
+    }
+
+    Console.WriteLine("slash commands");
+    Check("the registry has commands", SlashCommands.All.Count >= 10, $"{SlashCommands.All.Count} commands");
+    Check("help text is not empty", SlashCommands.HelpText().Length > 500);
+    Check("help for one command", SlashCommands.HelpText("rea").Contains("/rea <project>"));
+
+    var parsedHelp = SlashCommandParser.Parse("/help");
+    Check("/help parses", parsedHelp is not null && parsedHelp!.Name == "help");
+
+    var parsedRea = SlashCommandParser.Parse("/rea kimi.exe rea/findings/kimi list the exports");
+    Check("/rea parses with arguments",
+        parsedRea is not null && parsedRea!.Arguments == "kimi.exe rea/findings/kimi list the exports",
+        parsedRea?.Arguments ?? "null");
+
+    Check("a plain sentence is not a command", SlashCommandParser.Parse("save a file") is null);
+    Check("an unknown slash is not a command", SlashCommandParser.Parse("/nope") is null);
+    Check("an unknown slash still looks like one", SlashCommandParser.LooksLikeCommand("/nope"));
+
+    var token = SlashCommandParser.ActiveToken("/re", 3);
+    Check("the active token is found", token is not null && token!.Value.Name == "re");
+    Check("a token after whitespace is found", SlashCommandParser.ActiveToken("hello /re", 9) is not null);
+    Check("a slash inside a path is not a token",
+        SlashCommandParser.ActiveToken("src/rea", 7) is null);
+    Check("the token ends at the first space",
+        SlashCommandParser.ActiveToken("/rea foo", 8) is null);
+
+    Check("prefix matching narrows", SlashCommands.Match("pro").Select(c => c.Name).SequenceEqual(new[] { "provider", "providers" })
+        || SlashCommands.Match("pro").Any(c => c.Name == "provider"));
+
+    Console.WriteLine();
+    Console.WriteLine("provider store");
+    var store = ProviderStore.Load(cfg1.RuntimeDir);
+    Check("the presets are loaded", store.Providers.Count >= 18, $"{store.Providers.Count} providers");
+    Check("the local provider is there", store.Find("local") is not null);
+    Check("the local provider is active by default", store.Active == "local", store.Active);
+    Check("every endpoint from the catalogue is there",
+        new[] { "openrouter", "groq", "mistral", "ollama", "agnes", "xkiro", "atria", "reflection" }
+            .All(n => store.Find(n) is not null));
+    Check("the reflection preset echoes the reasoning",
+        store.Find("reflection")?.EchoReasoning == true);
+    Check("the other presets do not",
+        store.Find("openai")?.EchoReasoning != true);
+
+    var secret = SecretBox.Protect("test-token-123");
+    Check("a token is encrypted, not stored in the clear", secret.Length > 0 && !secret.Contains("test-token"));
+    Check("a token round-trips", SecretBox.Unprotect(secret) == "test-token-123",
+        SecretBox.Unprotect(secret));
+    Check("a wrong user cannot read it", SecretBox.Unprotect("bm90IGEgYmxvYg==") == "");
+
+    var scratch = new ProviderDef
+    {
+        Name = "probe-test",
+        Label = "Probe",
+        BaseUrl = "https://example.invalid/v1",
+        Style = ApiStyle.Anthropic,
+        Model = "probe-model",
+        Models = { "probe-model" },
+        ProtectedToken = secret
+    };
+    var probePath = Path.Combine(Path.GetTempPath(), "notecode-providers-probe.json");
+    var probeStore = new ProviderStore { Active = "probe-test", Providers = { scratch } };
+    File.WriteAllText(probePath, System.Text.Json.JsonSerializer.Serialize(
+        probeStore, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+    var reloaded = ProviderStore.LoadFile(probePath);
+    var restored = reloaded.Providers.FirstOrDefault(p => p.Name == "probe-test");
+    Check("the store round-trips", restored is not null);
+    Check("the encrypted token survives the file",
+        restored is not null && SecretBox.Unprotect(restored!.ProtectedToken) == "test-token-123");
+    Check("the active provider survives the file", reloaded.Active == "probe-test", reloaded.Active);
+    File.Delete(probePath);
+
+    Console.WriteLine();
+    Console.WriteLine("endpoint doctor helpers");
+    Check("urls are extracted",
+        EndpointDoctor.ExtractUrls("see https://api.example.com/v1 for details").Contains("https://api.example.com/v1"));
+    Check("a documentation page is not an api base",
+        !EndpointDoctor.LooksLikeApiBase("https://example.com/docs/quickstart"));
+    Check("an api base is recognised", EndpointDoctor.LooksLikeApiBase("https://api.example.com/v1"));
+    Check("the base url is normalised", EndpointDoctor.Normalise("https://api.example.com/v1/chat/completions") == "https://api.example.com/v1");
+    Check("model names are extracted",
+        EndpointDoctor.ExtractModelNames("try claude-sonnet-4-5 today").Contains("claude-sonnet-4-5"));
+
+    // A search result drops the version segment now and then. Treating that as a
+    // different endpoint made the doctor offer to "fix" a base URL that was right.
+    Check("a missing version segment is the same endpoint",
+        EndpointDoctor.SameEndpoint("https://api.deepseek.com", "https://api.deepseek.com/v1"));
+    Check("a different version is a different endpoint",
+        !EndpointDoctor.SameEndpoint("https://api.deepseek.com/v2", "https://api.deepseek.com/v1"));
+    Check("a different host is a different endpoint",
+        !EndpointDoctor.SameEndpoint("https://api.openai.com/v1", "https://api.anthropic.com/v1"));
+    Check("the same endpoint with a path is the same endpoint",
+        EndpointDoctor.SameEndpoint("https://api.minimax.io/v1/chat/completions", "https://api.minimax.io/v1"));
+
+    // A result URL is a slug, and a slug is not a model id.
+    var slugNames = EndpointDoctor.ExtractModelNames(
+        "1. Model Invocation - MiniMax API Docs\n" +
+        "   https://platform.minimax.io/docs/guides/text-generation\n" +
+        "   Use model MiniMax-M3.1-Flash and see and-api-including-grok-4 " +
+        "and deepseek-models-overview-00381 for details.");
+    Check("a real model name survives", slugNames.Contains("MiniMax-M3.1-Flash"),
+        string.Join(", ", slugNames));
+    Check("a slug is not a model name", !slugNames.Contains("and-api-including-grok-4"));
+    Check("a page path is not a model name", !slugNames.Contains("deepseek-models-overview-00381"));
+    Check("a url line is skipped",
+        !slugNames.Any(n => n.Contains("platform.minimax.io")));
+
+    Console.WriteLine();
+    Console.WriteLine("gguf metadata");
+    var model = cfg1.Llama.Model;
+    if (File.Exists(model))
+    {
+        var template = Gguf.ChatTemplate(model);
+        Check("the chat template is in the model file", !string.IsNullOrEmpty(template),
+            template is null ? "none" : $"{template.Length} characters");
+        Check("the model has a name", !string.IsNullOrEmpty(Gguf.ModelName(model)), Gguf.ModelName(model) ?? "none");
+    }
+    else
+    {
+        Console.WriteLine($"  [SKIP] the model file is not there: {model}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("the vision projector");
+    var mmproj = cfg1.Llama.Mmproj;
+    Check("a projector is configured", !string.IsNullOrWhiteSpace(mmproj), mmproj);
+    Check("the projector file is there", !string.IsNullOrWhiteSpace(mmproj) && File.Exists(mmproj),
+        mmproj is null ? "none" : $"{new FileInfo(mmproj).Length / 1024 / 1024} MB");
+
+    Console.WriteLine();
+    Console.WriteLine(failures == 0 ? "commands: PASS" : $"commands: FAIL ({failures})");
+    return failures == 0 ? 0 : 1;
+}
+
+// The endpoint doctor against the live network: the real providers from the store,
+// the real GWN search gateway. This is the one part of the BYOK path that cannot be
+// proven with a stub.
+//
+//   ToolProbe --doctor <configPath> [provider]
+if (args[0] == "--doctor")
+{
+    var cfgDoc = AppConfig.Load(args[1]);
+    var only = args.Length > 2 && !args[2].StartsWith("--") ? args[2] : null;
+
+    var store = ProviderStore.Load(cfgDoc.RuntimeDir);
+    Console.WriteLine($"providers: {store.Providers.Count}, active: {store.Active}");
+    Console.WriteLine($"search gateway: {cfgDoc.Search.Server}");
+    Console.WriteLine($"search key file: {cfgDoc.Search.KeyFile}");
+    Console.WriteLine();
+
+    var doctor = new EndpointDoctor(cfgDoc);
+    var results = await doctor.CheckAllAsync(store, only,
+        new Progress<string>(p => Console.WriteLine($"  ... {p}")));
+
+    Console.WriteLine();
+    foreach (var r in results)
+    {
+        Console.WriteLine($"{r.Provider} ({r.Label})");
+        Console.WriteLine($"   reachable : {r.Reachable}");
+        Console.WriteLine($"   status    : {r.Status}");
+        Console.WriteLine($"   models    : {(r.Models.Count == 0 ? "(none)" : string.Join(", ", r.Models.Take(6)))}");
+        if (r.SuggestedBaseUrl is not null) Console.WriteLine($"   suggested : {r.SuggestedBaseUrl}");
+        if (r.SuggestedModels.Count > 0)
+            Console.WriteLine($"   new models: {string.Join(", ", r.SuggestedModels.Take(8))}");
+        if (!string.IsNullOrWhiteSpace(r.Note)) Console.WriteLine($"   note      : {r.Note}");
+        Console.WriteLine();
+    }
+
+    // A provider with no web answer still has to produce a result, so the doctor
+    // degrades instead of throwing.
+    var anyOk = results.Count > 0 && results.Any(r => r.Reachable || !string.IsNullOrWhiteSpace(r.Note));
+    Console.WriteLine(anyOk ? "doctor: PASS" : "doctor: FAIL");
+    return anyOk ? 0 : 1;
+}
+
+// Adds or updates a provider in the store and makes it the active one.
+//
+//   ToolProbe --setprovider <configPath> <name> <baseUrl> <model> <token> [openai|anthropic]
+//
+// The token is encrypted with DPAPI before it is written, the same way the form
+// does it, so a scripted provider is not a weaker one.
+if (args[0] == "--setprovider")
+{
+    var cfgSp = AppConfig.Load(args[1]);
+    string spName = args[2];
+    string spUrl = args[3];
+    string spModel = args[4];
+    string spToken = args[5];
+    var spStyle = args.Length > 6 && args[6].Equals("anthropic", StringComparison.OrdinalIgnoreCase)
+        ? ApiStyle.Anthropic : ApiStyle.OpenAi;
+
+    var spStore = ProviderStore.Load(cfgSp.RuntimeDir);
+    var spDef = spStore.Find(spName);
+    if (spDef is null)
+    {
+        spDef = new ProviderDef { Name = spName, Label = spName };
+        spStore.Providers.Add(spDef);
+    }
+    spDef.Label = spName;
+    spDef.BaseUrl = spUrl;
+    spDef.Model = spModel;
+    spDef.Style = spStyle;
+    spDef.ProtectedToken = SecretBox.Protect(spToken);
+    spDef.Models.Clear();
+    spDef.Models.Add(spModel);
+    spStore.Active = spName;
+    spStore.Save(cfgSp.RuntimeDir);
+
+    var spCheck = ProviderStore.Load(cfgSp.RuntimeDir).Find(spName);
+    Console.WriteLine($"provider '{spName}' -> {spCheck?.BaseUrl} model={spCheck?.Model} style={spCheck?.Style}");
+    Console.WriteLine($"token stored: {(spCheck?.HasToken == true)}, decrypted ok: {SecretBox.Unprotect(spCheck?.ProtectedToken ?? "") == spToken}");
+    return spCheck is not null && spCheck.HasToken ? 0 : 1;
+}
+
+// Removes a provider from the store and puts the local one back in charge.
+//
+//   ToolProbe --removeprovider <configPath> <name>
+if (args[0] == "--removeprovider")
+{
+    var cfgRp = AppConfig.Load(args[1]);
+    string rpName = args[2];
+    var rpStore = ProviderStore.Load(cfgRp.RuntimeDir);
+    int removed = rpStore.Providers.RemoveAll(p => string.Equals(p.Name, rpName, StringComparison.OrdinalIgnoreCase));
+    if (!string.Equals(rpStore.Active, "local", StringComparison.OrdinalIgnoreCase))
+        rpStore.Active = "local";
+    rpStore.Save(cfgRp.RuntimeDir);
+    Console.WriteLine($"removed {removed} provider(s) named '{rpName}', active is now '{rpStore.Active}'");
+    return removed > 0 ? 0 : 1;
+}
+
+// Puts a provider in charge, without touching the rest of the store.
+//
+//   ToolProbe --setactive <configPath> <name>
+//
+// The tests need a known starting point: a test that leaves a provider
+// behind would otherwise hand the next one a provider that is not there, and
+// the failure would look like a product bug.
+if (args[0] == "--setactive")
+{
+    var cfgSa = AppConfig.Load(args[1]);
+    string saName = args[2];
+    var saStore = ProviderStore.Load(cfgSa.RuntimeDir);
+    bool saKnown = saName.Equals("local", StringComparison.OrdinalIgnoreCase) ||
+                   saStore.Providers.Any(p => string.Equals(p.Name, saName, StringComparison.OrdinalIgnoreCase));
+    if (!saKnown)
+    {
+        Console.Error.WriteLine($"no provider named '{saName}'");
+        return 1;
+    }
+    saStore.Active = saName;
+    saStore.Save(cfgSa.RuntimeDir);
+    Console.WriteLine($"active provider is now '{saStore.Active}'");
+    return 0;
+}
+
+var cfg = AppConfig.Load(args[0]);
+using var llama = new LlamaServer(cfg);
+
+if (!llama.IsHealthy)
+{
+    Console.Error.WriteLine($"server not healthy at {llama.BaseUrl}");
+    return 1;
+}
+
+var includeRea = args.Contains("--rea");
+var tools = await llama.GetToolsAsync(includeRea);
+Console.WriteLine($"tools advertised: {tools.Count}");
+foreach (var t in tools) Console.WriteLine($"  {t.Name}  -  {Shorten(t.Description, 70)}");
+
+var prompt = args.FirstOrDefault(a => !a.EndsWith(".json") && a != "--rea")
+             ?? "Save a markdown file named probe-notes.md with the content \"# Probe\"";
+
+var messages = new List<ChatMessage>
+{
+    new("system",
+        "You are notecode, a local coding assistant embedded in a code editor. " +
+        "Be concise and concrete. You have tools that act on the workspace: " +
+        "save_as(path, content, type, open) writes a file and opens it in the editor - " +
+        "the extension decides the file type, and type names the language when the " +
+        "path has no extension (for example type='cpp' or type='markdown'); " +
+        "open_in_editor(path) opens an existing file; list_files(dir, recursive) " +
+        "browses the workspace; read_file(path) reads a file. " +
+        "When the user says 'save as ...' or names a file, call save_as with the " +
+        "right extension and then say which file you wrote."),
+    new("user", prompt),
+};
+
+var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+
+for (int turn = 0; turn < 6; turn++)
+{
+    cts.Token.ThrowIfCancellationRequested();
+
+    var result = await llama.StreamChatTurnAsync(
+        messages,
+        tools,
+        delta => Console.Write(delta),
+        ct: cts.Token);
+
+    Console.WriteLine();
+    Console.WriteLine($"[turn {turn}] finish={result.FinishReason} text={result.Content.Length} chars toolCalls={result.ToolCalls.Count}");
+
+    if (result.ToolCalls.Count == 0) break;
+
+    messages.Add(new ChatMessage("assistant", result.Content, null, result.ToolCalls));
+
+    foreach (var call in result.ToolCalls)
+    {
+        Console.WriteLine($"   -> {call.Name} id={call.Id} args={call.ArgumentsJson}");
+        var output = await llama.InvokeToolAsync(call.Name, call.ArgumentsJson, cts.Token);
+        Console.WriteLine($"   <- {Shorten(output, 400)}");
+        messages.Add(new ChatMessage("tool", output, call.Id));
+    }
+}
+
+return 0;
+
+static string Shorten(string text, int max)
+    => string.IsNullOrEmpty(text) ? "" : text.Length <= max ? text : text[..max] + "...";

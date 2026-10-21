@@ -1,0 +1,27 @@
+{
+  "$comment": "MCP server definitions in Cursor-compatible format, consumed by llama-server --mcp-servers-config. Mirrors notecode.config.json -> mcp.servers.",
+  "$note": "llama.cpp's parser is stdio-only (it reads command/cwd/args/env/timeout_ms and skips entries without a command), so HTTP servers are reached through mcp-stdio-bridge.mjs.",
+
+  "mcpServers": {
+    "notecode": {
+      "command": "node",
+      "args": ["C:\\NexusOne\\prototypes\\notecode\\runtime\\notecode-mcp.mjs"],
+      "timeout_ms": 60000
+    },
+    "rea": {
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "npx", "-y", "rea-agents@6.4.0", "mcp"],
+      "timeout_ms": 600000
+    },
+    "blender": {
+      "command": "node",
+      "args": ["C:\\NexusOne\\prototypes\\notecode\\runtime\\mcp-stdio-bridge.mjs", "http://127.0.0.1:8765/mcp"],
+      "timeout_ms": 120000
+    },
+    "global-brain": {
+      "command": "brain-system.exe",
+      "args": ["--mcp"],
+      "timeout_ms": 60000
+    }
+  }
+}

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Notecode-Setup</AssemblyName>
+    <RootNamespace>Notecode.Installer</RootNamespace>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+
+    <!-- The version is stamped in by the build script, so the installer and
+         the app it installs always agree. -->
+    <Version>0.2.0</Version>
+    <FileVersion>0.2.0.0</FileVersion>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <Product>notecode</Product>
+    <Company>notecode</Company>
+    <Description>Installs notecode, the local-model IDE.</Description>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The payload is the app and the llama runtime, zipped by
+         scripts/build-installer.ps1. It is only there when the script has
+         run, so a fresh clone still builds. -->
+    <EmbeddedResource Include="..\..\installer\payload.zip"
+                      Condition="Exists('..\..\installer\payload.zip')">
+      <LogicalName>payload.zip</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

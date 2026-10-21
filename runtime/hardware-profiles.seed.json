@@ -1,0 +1,30 @@
+{
+  "$comment": "Machines that have not run notecode yet, described so they can be set up from another one. The scan on boot picks the first seed whose match applies to this machine and uses it to create the profile. A seed is a whole configuration: the model and the projector are set even when the projector is empty, because a projector that belongs to a different model stops the server from starting.",
+  "profiles": [
+    {
+      "name": "rtx-5060-ti",
+      "note": "Core Ultra 5, RTX 5060 Ti with 8 GB of video memory, 16 GB of RAM. The CUDA build is the fast one. The model is 17.3 GiB and the RAM is 16 GiB, so the context is kept at 16384 and about 7 GiB of the model lives on the card. The NPU is detected but llama.cpp has no backend for it.",
+      "match": {
+        "gpuVendor": "NVIDIA",
+        "minVramGiB": 6
+      },
+      "backend": "cuda",
+      "model": "C:\\models\\Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+      "mmproj": "",
+      "ctxSize": 16384,
+      "nGpuLayers": 99
+    },
+    {
+      "name": "vulkan-any-gpu",
+      "note": "Any adapter with 4 GiB or more that is not NVIDIA, or an NVIDIA card where the CUDA build has not been compiled. Vulkan needs one driver and runs on NVIDIA, AMD and Intel alike.",
+      "match": {
+        "minVramGiB": 4
+      },
+      "backend": "vulkan",
+      "model": "C:\\models\\MiniCPM-V-4_7-35B-A3B-Q4_K_M.gguf",
+      "mmproj": "C:\\models\\mmproj-model-f16.gguf",
+      "ctxSize": 16384,
+      "nGpuLayers": 99
+    }
+  ]
+}

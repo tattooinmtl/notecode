@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>notecode terminal</title>
+<link rel="stylesheet" href="vendor/xterm/css/xterm.css" />
+<style>
+  :root {
+    --void:   #07090F;
+    --canvas: #0B0E17;
+    --text:   #E8ECF5;
+    --muted:  #939DB4;
+  }
+  html, body { margin:0; padding:0; height:100%; background:var(--void); overflow:hidden; }
+  #term { height:100%; width:100%; padding: 4px 0 0 8px; }
+  .xterm-viewport { background-color: transparent !important; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+
+<script src="vendor/xterm/lib/xterm.js"></script>
+<script src="vendor/xterm/addon/fit.js"></script>
+<script>
+(function () {
+  var term = new Terminal({
+    fontFamily: 'Cascadia Code, Consolas, monospace',
+    fontSize: 13,
+    cursorBlink: true,
+    allowProposedApi: true,
+    scrollback: 5000,
+    theme: {
+      background: '#07090F',
+      foreground: '#E8ECF5',
+      cursor: '#22D3EE',
+      cursorAccent: '#07090F',
+      selectionBackground: 'rgba(139,92,246,0.32)',
+      black: '#0B0E17',
+      red: '#FB7185',
+      green: '#34D399',
+      yellow: '#FBBF24',
+      blue: '#60A5FA',
+      magenta: '#A78BFA',
+      cyan: '#22D3EE',
+      white: '#E8ECF5',
+      brightBlack: '#5F6980',
+      brightRed: '#FDA4AF',
+      brightGreen: '#6EE7B7',
+      brightYellow: '#FCD34D',
+      brightBlue: '#93C5FD',
+      brightMagenta: '#C4B5FD',
+      brightCyan: '#67E8F9',
+      brightWhite: '#FFFFFF'
+    }
+  });
+
+  var fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById('term'));
+  fit.fit();
+
+  function post(msg) {
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(msg);
+  }
+
+  term.onData(function (d) { post({ type: 'input', d: d }); });
+
+  window.addEventListener('resize', function () {
+    fit.fit();
+    post({ type: 'resize', cols: term.cols, rows: term.rows });
+  });
+
+  // Host -> page messages arrive on window.chrome.webview, NOT on window.
+  // (window.addEventListener('message') is for cross-window postMessage.)
+  function onHostMessage(e) {
+    var m = e.data;
+    if (!m) return;
+    switch (m.type) {
+      case 'data': term.write(m.d); break;
+      case 'title': document.title = m.d; break;
+      case 'exit': term.writeln('\r\n' + m.d + '\r\n'); break;
+      case 'clear': term.clear(); break;
+    }
+  }
+
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.addEventListener('message', onHostMessage);
+  } else {
+    window.addEventListener('message', onHostMessage);
+  }
+
+  // Report the initial geometry so ConPTY is created with the right size.
+  post({ type: 'resize', cols: term.cols, rows: term.rows });
+  post({ type: 'ready' });
+})();
+</script>
+</body>
+</html>

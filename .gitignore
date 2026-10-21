@@ -1,0 +1,113 @@
+# notecode - what does not go into the repository.
+#
+# Three things are kept out: anything that could be a credential, the model
+# weights (tens of gigabytes), and the machine state that belongs to one
+# computer rather than to the project.
+#
+# The .md rule is the surprising one. Markdown is ignored, because this
+# project accumulates a lot of it while it works - notes, plans, findings,
+# scratch files in the workspace. The files the app itself binds are kept:
+# the skills it installs and the project's own agents.md.
+
+# ---------------------------------------------------------------- credentials
+# Nothing that could be a key, a token or a password.
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.secret
+*_rsa
+*_dsa
+*_ed25519
+id_rsa*
+id_dsa*
+id_ed25519*
+secrets.json
+secrets.local.json
+credentials.json
+settings.local.json
+config.local.json
+*.user
+
+# The provider store holds the API tokens, encrypted with DPAPI for the
+# user's Windows account. The presets in it are not secret, but the file is
+# machine state and is written by the app, so it is never committed.
+runtime/providers.json
+
+# The MCP server list can carry a key in a command line.
+runtime/mcp-servers.local.json
+
+# -------------------------------------------------------------------- models
+# The weights live on the machine, not in the repository. A Q4 model of this
+# size is 17 GB and there is no version control that wants that.
+*.gguf
+*.ggml
+*.safetensors
+*.pt
+*.pth
+*.onnx
+models/
+
+# -------------------------------------------------------------- build output
+bin/
+obj/
+dist/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.user
+*.suo
+*.VC.db
+.vs/
+.vscode/
+.idea/
+TestResults/
+installer/build/
+installer/output/
+installer/stage/
+installer/payload.zip
+*.apk
+*.aab
+
+# -------------------------------------------------------------- machine state
+# Written by the app while it runs, and true of one computer only.
+runtime/*.log
+runtime/*.log.*
+runtime/*.pid
+runtime/app-requests.jsonl
+runtime/open-queue.jsonl
+runtime/app-results/
+runtime/app-context.json
+runtime/notecode-app.log
+runtime/llama-server.log
+runtime/llama-server.log.err
+runtime/mcp-trace.log
+runtime/notecode-server.log
+
+# ----------------------------------------------------------------- test litter
+# The workspace is where the tests write, and the findings are evidence for
+# a run rather than part of the project.
+workspace/
+rea/findings/
+assets/preview/
+assets/_*
+
+# ------------------------------------------------------------------- markdown
+# Ignored, with the files the app binds kept.
+*.md
+!**/SKILL.md
+!**/agents.md
+!/README.md
+!/docs/*.md
+!/finalAudit.md
+
+# --------------------------------------------------------------------- macOS
+.DS_Store
+Thumbs.db
+desktop.ini

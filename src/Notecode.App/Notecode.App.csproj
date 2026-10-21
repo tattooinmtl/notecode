@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>notecode</AssemblyName>
+    <RootNamespace>Notecode.App</RootNamespace>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <Version>0.2.0</Version>
+    <FileVersion>0.2.0.0</FileVersion>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <InformationalVersion>0.2.0</InformationalVersion>
+    <Company>notecode</Company>
+    <Product>notecode</Product>
+    <Description>A dual-pane IDE over a local llama.cpp runtime.</Description>
+    <Copyright>Copyright (c) 2026 notecode</Copyright>
+    <ApplicationIcon>notecode.ico</ApplicationIcon>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The editor (CodeMirror) and terminal (xterm.js) are vendored under wwwroot so
+         notecode works fully offline. No CDN, no network at runtime. -->
+    <Content Include="wwwroot\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+
+    <!-- The one icon: the window, the task bar, the notification area and the
+         installed shortcut all wear it. It is built by scripts/build-icon.ps1.
+
+         It is embedded in the assembly rather than shipped as a loose file,
+         because a single file publish swallows loose content and there is
+         then no file to find at run time. The installer reads the same file
+         from the project when it builds the shortcut. -->
+    <EmbeddedResource Include="notecode.ico">
+      <LogicalName>notecode.ico</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

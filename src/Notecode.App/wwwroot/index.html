@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>notecode editor</title>
+<link rel="stylesheet" href="vendor/codemirror5/lib/codemirror.css" />
+<style>
+  :root {
+    --void:    #07090F;
+    --canvas:  #0B0E17;
+    --surface: #11151F;
+    --raised:  #161B27;
+    --border:  #232A3A;
+    --border2: #2E3750;
+    --text:    #E8ECF5;
+    --muted:   #939DB4;
+    --dim:     #5F6980;
+    --violet:  #A78BFA;
+    --cyan:    #22D3EE;
+    --mint:    #34D399;
+    --amber:   #FBBF24;
+    --rose:    #FB7185;
+  }
+
+  html, body { margin:0; padding:0; height:100%; background:var(--canvas); overflow:hidden; }
+  #host { height:100%; }
+
+  /* The same aurora as the agent panel, so the two surfaces read as one app. */
+  body::before {
+    content:""; position:fixed; inset:0; pointer-events:none;
+    background:
+      radial-gradient(620px 340px at 8% -10%,  rgba(139,92,246,0.13), transparent 72%),
+      radial-gradient(520px 300px at 98% 0%,   rgba(34,211,238,0.08), transparent 72%);
+  }
+
+  .CodeMirror {
+    height:100%;
+    background:transparent;
+    color:var(--text);
+    font-family:"Cascadia Code","Cascadia Mono",Consolas,ui-monospace,monospace;
+    font-size:13px;
+    line-height:1.55;
+  }
+  .CodeMirror-focused { outline:none; }
+  .CodeMirror-gutters { background:transparent; border-right:1px solid var(--border); }
+  .CodeMirror-linenumber { color:var(--dim); }
+  .CodeMirror-linenumber.CodeMirror-gutter-elt-active { color:var(--muted); }
+  .CodeMirror-cursor { border-left:2px solid var(--cyan); }
+  .CodeMirror-selected { background:rgba(139,92,246,0.26); }
+  .CodeMirror-focused .CodeMirror-selected { background:rgba(139,92,246,0.34); }
+  .CodeMirror-scroll::-webkit-scrollbar { width: 11px; height: 11px; }
+  .CodeMirror-scroll::-webkit-scrollbar-track { background:transparent; }
+  .CodeMirror-scroll::-webkit-scrollbar-thumb {
+    background:var(--border2); border-radius:8px;
+    border:3px solid transparent; background-clip:padding-box;
+  }
+  .CodeMirror-scroll::-webkit-scrollbar-thumb:hover { background:#3C4763; background-clip:padding-box; }
+  .CodeMirror-scroll::-webkit-scrollbar-corner { background:transparent; }
+  .CodeMirror-matchingbracket {
+    color:var(--cyan) !important;
+    border-bottom:1px solid var(--cyan);
+    background:rgba(34,211,238,0.10);
+  }
+  .CodeMirror-nonmatchingbracket { color:var(--rose) !important; }
+  .CodeMirror-searching { background:rgba(167,139,250,0.30); }
+
+  /* Token colours: violet for control, cyan for data, mint for strings, amber for
+     constants, dim slate for comments. */
+  .cm-s-notecode .cm-keyword  { color:#C4B5FD; }
+  .cm-s-notecode .cm-atom     { color:var(--cyan); }
+  .cm-s-notecode .cm-number   { color:var(--amber); }
+  .cm-s-notecode .cm-def      { color:#93C5FD; }
+  .cm-s-notecode .cm-variable { color:var(--text); }
+  .cm-s-notecode .cm-variable-2 { color:#7DD3FC; }
+  .cm-s-notecode .cm-variable-3, .cm-s-notecode .cm-type { color:var(--mint); }
+  .cm-s-notecode .cm-property  { color:#7DD3FC; }
+  .cm-s-notecode .cm-operator  { color:#CBD5E1; }
+  .cm-s-notecode .cm-string   { color:var(--mint); }
+  .cm-s-notecode .cm-string-2 { color:#86EFAC; }
+  .cm-s-notecode .cm-comment  { color:var(--dim); font-style:italic; }
+  .cm-s-notecode .cm-meta     { color:var(--amber); }
+  .cm-s-notecode .cm-qualifier { color:#A78BFA; }
+  .cm-s-notecode .cm-builtin  { color:#22D3EE; }
+  .cm-s-notecode .cm-bracket  { color:#94A3B8; }
+  .cm-s-notecode .cm-tag      { color:var(--violet); }
+  .cm-s-notecode .cm-attribute{ color:var(--amber); }
+  .cm-s-notecode .cm-header   { color:var(--cyan); font-weight:600; }
+  .cm-s-notecode .cm-quote    { color:var(--mint); }
+  .cm-s-notecode .cm-hr        { color:var(--border2); }
+  .cm-s-notecode .cm-link     { color:var(--cyan); text-decoration:underline; }
+  .cm-s-notecode .cm-error    { color:#fff; background:var(--rose); }
+  .cm-s-notecode .cm-formatting { color:var(--dim); }
+  .cm-s-notecode .cm-strong   { font-weight:700; }
+  .cm-s-notecode .cm-em       { font-style:italic; }
+
+  #status {
+    position:absolute; right:14px; bottom:10px;
+    font:11px "Cascadia Code",Consolas,monospace; color:var(--dim);
+    pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<div id="host"><textarea id="code"></textarea></div>
+<div id="status">ready</div>
+
+<script src="vendor/codemirror5/lib/codemirror.js"></script>
+<script src="vendor/codemirror5/mode/clike.js"></script>
+<script src="vendor/codemirror5/mode/javascript.js"></script>
+<script src="vendor/codemirror5/mode/python.js"></script>
+<script src="vendor/codemirror5/mode/xml.js"></script>
+<script src="vendor/codemirror5/mode/htmlmixed.js"></script>
+<script src="vendor/codemirror5/mode/css.js"></script>
+<script src="vendor/codemirror5/mode/markdown.js"></script>
+<script src="vendor/codemirror5/mode/shell.js"></script>
+<script src="vendor/codemirror5/mode/sql.js"></script>
+<script src="vendor/codemirror5/mode/php.js"></script>
+<script src="vendor/codemirror5/mode/rust.js"></script>
+<script src="vendor/codemirror5/mode/yaml.js"></script>
+<script src="vendor/codemirror5/mode/ruby.js"></script>
+<script src="vendor/codemirror5/mode/lua.js"></script>
+<script src="vendor/codemirror5/mode/go.js"></script>
+<script src="vendor/codemirror5/mode/swift.js"></script>
+<script src="vendor/codemirror5/mode/haskell.js"></script>
+<script src="vendor/codemirror5/mode/perl.js"></script>
+<script src="vendor/codemirror5/mode/powershell.js"></script>
+<script src="vendor/codemirror5/mode/dockerfile.js"></script>
+<script src="vendor/codemirror5/mode/diff.js"></script>
+<script src="vendor/codemirror5/mode/vue.js"></script>
+<script src="vendor/codemirror5/mode/textile.js"></script>
+<script src="vendor/codemirror5/mode/stex.js"></script>
+<script src="vendor/codemirror5/addon/edit/closebrackets.js"></script>
+<script src="vendor/codemirror5/addon/edit/matchbrackets.js"></script>
+<script src="vendor/codemirror5/addon/edit/searchcursor.js"></script>
+<script>
+(function () {
+  var cm = CodeMirror.fromTextArea(document.getElementById('code'), {
+    lineNumbers: true,
+    theme: 'notecode',
+    // The name a screen reader announces for the editing surface. Without it
+    // the browser's own hidden textarea is an unnamed edit box.
+    screenReaderLabel: 'Code editor',
+    indentUnit: 4,
+    tabSize: 4,
+    indentWithTabs: true,
+    lineWrapping: false,
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    gutters: ["CodeMirror-linenumbers", "CodeMirror-linenumbers"],
+    extraKeys: {
+      'Ctrl-S': function () { save(); },
+      'Ctrl-F': function () { cm.execCommand('findPersistent'); },
+      'Ctrl-G': function () { cm.execCommand('findNext'); },
+      'Ctrl-Z': function () { cm.undo(); },
+      'Ctrl-Y': function () { cm.redo(); },
+      'Ctrl-/': function () { cm.toggleComment(); },
+      'Tab': function (cm) {
+        if (cm.somethingSelected()) cm.indentSelection('add');
+        else cm.replaceSelection('    ');
+      }
+    }
+  });
+
+  var currentPath = null;
+  var dirty = false;
+
+  function post(msg) {
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(msg);
+  }
+
+  function setDirty(v) {
+    if (dirty === v) return;
+    dirty = v;
+    post({ type: 'dirty', path: currentPath, value: v });
+  }
+
+  function save() {
+    if (!currentPath) return;
+    post({ type: 'save', path: currentPath, content: cm.getValue() });
+    setDirty(false);
+  }
+
+  cm.on('change', function () { setDirty(true); });
+  cm.on('cursorActivity', function () {
+    var c = cm.getCursor();
+    post({ type: 'cursor', line: c.line + 1, col: c.ch + 1 });
+  });
+
+  // Host -> page messages arrive on window.chrome.webview, NOT on window.
+  // (window.addEventListener('message') is for cross-window postMessage.)
+  function onHostMessage(e) {
+    var m = e.data;
+    if (!m) return;
+    switch (m.type) {
+      case 'init':
+        cm.setOption('mode', m.mode);
+        cm.setOption('fontFamily', m.fontFamily);
+        cm.setOption('fontSize', m.fontSize);
+        cm.setOption('tabSize', m.tabSize);
+        cm.setOption('lineWrapping', !!m.lineWrapping);
+        cm.setOption('indentUnit', m.tabSize);
+        cm.refresh();
+        // Ask the host for the current file now that both sides are in sync.
+        post({ type: 'needContent' });
+        break;
+
+      case 'load':
+        currentPath = m.path;
+        cm.setOption('mode', m.mode || 'text/plain');
+        cm.setValue(m.content || '');
+        cm.clearHistory();
+        setDirty(false);
+        cm.refresh();
+        cm.focus();
+        break;
+
+      case 'setContent':
+        cm.setValue(m.content || '');
+        break;
+
+      case 'requestContent':
+        // The host is asking for the buffer so it can save it. It has just been
+        // written, so the page is clean again - otherwise the page and the host
+        // would disagree about whether there are unsaved edits.
+        post({ type: 'save', path: currentPath, content: cm.getValue() });
+        setDirty(false);
+        break;
+
+      case 'getBuffer':
+        // The host wants the live buffer, including edits that are not saved.
+        post({ type: 'buffer', id: m.id, path: currentPath, content: cm.getValue() });
+        break;
+
+      case 'undo': cm.undo(); break;
+      case 'redo': cm.redo(); break;
+      case 'find': cm.execCommand('findPersistent'); break;
+    }
+  }
+
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.addEventListener('message', onHostMessage);
+  } else {
+    window.addEventListener('message', onHostMessage);
+  }
+
+  post({ type: 'ready' });
+  document.getElementById('status').textContent = 'editor ready';
+})();
+</script>
+</body>
+</html>

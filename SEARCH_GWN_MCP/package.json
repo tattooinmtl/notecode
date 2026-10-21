@@ -1,0 +1,14 @@
+{
+  "name": "search-gwn-mcp",
+  "version": "1.0.0",
+  "description": "Universal MCP server (stdio) for the private GWN Search Gateway (SearXNG). No dependencies.",
+  "type": "module",
+  "bin": { "search-gwn-mcp": "server.mjs" },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node test.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED",
+  "private": true
+}

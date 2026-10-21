@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ConptyProbe</AssemblyName>
+    <RootNamespace>Notecode.Probe</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Link the real sources so the probe exercises shipping code, not a copy. -->
+    <Compile Include="..\Notecode.App\Native.cs" Link="Native.cs" />
+    <Compile Include="..\Notecode.App\ConptySession.cs" Link="ConptySession.cs" />
+    <Compile Include="RefConpty.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+</Project>
