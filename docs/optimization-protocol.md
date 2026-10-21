@@ -37,8 +37,9 @@ The engine still does 10 tok/s. The app takes it away in two ways:
 | B10 | Tool results go back to the model untruncated | One `read_file` of a big file inflates every later pass of the tool loop | **Fixed**: 4,000 chars to the model (Stage 2) |
 | B11 | Duplicate tools: `read_file` / `notecode_read_file`, `write_file`+`edit_file` / `save_as`+`write_text`, `exec_shell_command` / `run_command`. The system prompt names `save_as`, but the tool is called `notecode_save_as` | About 1k tokens of duplicate schemas, and the model can pick the wrong tool | **Fixed**: `llama.agent.chatTools`, 10 tools (Stage 2) |
 | B12 | No conversation history is sent: each turn has only the system prompt, context and the new message | The model forgets the previous turn. This is a functional bug, and it must be fixed with a hard cap or it will undo the speed work | **Fixed**: last 4 exchanges, ≤ 6,000 chars (Stage 2) |
-| B13 | `LlamaServer.IsHealthy` blocks on the UI thread (`GetAwaiter().GetResult()`, up to 3 s) at the start of every turn | UI freezes before each turn | Stage 3 |
+| B13 | `LlamaServer.IsHealthy` blocks on the UI thread (`GetAwaiter().GetResult()`, up to 3 s) at the start of every turn | UI freezes before each turn | **Fixed**: `IsHealthyAsync` |
 | B14 | `RunWrapperAsync` reads all of stdout before it reads stderr | Classic pipe deadlock if the wrapper writes a lot to stderr | Stage 3 |
+| B16 | Introduced by the first Stage 2 commit: the editor buffer came after the history, and the history grows every turn | The buffer moved each turn and was read again: **43.3 s** of prefill on turn 2 (`scripts/bench-history.mjs`); `--cache-reuse` did not recover it | **Fixed**: buffer goes before the history; turn 2 now reads 47 tokens in **1.8 s** |
 | B15 | The mmproj (1.04 GiB f16) is always loaded | RAM taken even when no image is ever attached | **Fixed**: `llama.loadMmproj`, off by default (Stage 1) |
 
 ## 3. The protocol

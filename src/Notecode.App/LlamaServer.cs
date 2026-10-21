@@ -71,19 +71,25 @@ internal sealed class LlamaServer : IChatBackend, IDisposable
         Action<string>? onReasoning = null) =>
         StreamChatTurnAsync(messages, tools, onDelta, onReasoning, ct: ct);
 
-    public bool IsHealthy
+    /// <summary>
+    /// Whether the server answers /health within three seconds. The app awaits
+    /// this: a blocking check on the UI thread froze the window for up to three
+    /// seconds at the start of every turn.
+    /// </summary>
+    public async Task<bool> IsHealthyAsync(CancellationToken ct = default)
     {
-        get
+        try
         {
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                using var resp = _http.GetAsync($"{_cfg.Llama.BaseUrl}/health", cts.Token).GetAwaiter().GetResult();
-                return resp.IsSuccessStatusCode;
-            }
-            catch { return false; }
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(3));
+            using var resp = await _http.GetAsync($"{_cfg.Llama.BaseUrl}/health", cts.Token).ConfigureAwait(false);
+            return resp.IsSuccessStatusCode;
         }
+        catch { return false; }
     }
+
+    /// <summary>The blocking form, for the console probe. Not for the UI thread.</summary>
+    public bool IsHealthy => IsHealthyAsync().GetAwaiter().GetResult();
 
     /// <summary>Server root, where /health and /tools live.</summary>
     public string BaseUrl => _cfg.Llama.BaseUrl;
@@ -133,9 +139,9 @@ internal sealed class LlamaServer : IChatBackend, IDisposable
 
     public async Task<bool> StartAsync(int? ctx = null, int? threads = null, CancellationToken ct = default)
     {
-        if (IsHealthy) return true;
+        if (await IsHealthyAsync(ct).ConfigureAwait(false)) return true;
         var (code, output) = await RunWrapperAsync("start", ctx, threads, ct).ConfigureAwait(false);
-        return code == 0 && IsHealthy;
+        return code == 0 && await IsHealthyAsync(ct).ConfigureAwait(false);
     }
 
     public async Task StopAsync(CancellationToken ct = default)

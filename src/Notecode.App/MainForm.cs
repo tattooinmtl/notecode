@@ -606,7 +606,7 @@ internal sealed class MainForm : Form
             _mcpRetryTimer.Start();
             _sessionTimer.Tick += (_, _) => SaveSession();
             _sessionTimer.Start();
-            UpdateServerStatus();
+            _ = UpdateServerStatusAsync();
         }
         catch (Exception ex)
         {
@@ -1732,9 +1732,9 @@ internal sealed class MainForm : Form
         await StartServerAsync();
     }
 
-    private void UpdateServerStatus()
+    private async Task UpdateServerStatusAsync()
     {
-        var up = _llama.IsHealthy;
+        var up = await _llama.IsHealthyAsync();
         // The backend tag stays: the poll says whether the server is alive, and
         // the tag says which build it is running, which is the part that changes
         // when a profile is applied.
@@ -2012,7 +2012,7 @@ capabilities = [ ""tool_use"" ]
             case "tools": await CmdToolsAsync(); break;
             case "context": CmdContext(cmd.Arguments); break;
             case "clear": _chat.Clear(); _chatHistory.Clear(); break;
-            case "status": CmdStatus(); break;
+            case "status": await CmdStatusAsync(); break;
             default:
                 _chat.Note($"There is no command called `{cmd.Name}`. Type `/help` for the list.", "notecode");
                 break;
@@ -2414,7 +2414,7 @@ capabilities = [ ""tool_use"" ]
             "notecode · addskills");
 
         var provider = _providers.ActiveProvider();
-        if (provider.IsLocal && !_llama.IsHealthy)
+        if (provider.IsLocal && !await _llama.IsHealthyAsync())
         {
             _chat.Note("The local server is not running, so the fixer cannot run. " +
                        "Start it from Run > Start llama server.", "notecode · addskills");
@@ -3043,15 +3043,16 @@ capabilities = [ ""tool_use"" ]
             "notecode · version");
     }
 
-    private void CmdStatus()
+    private async Task CmdStatusAsync()
     {
         var provider = _providers.ActiveProvider();
+        var up = await _llama.IsHealthyAsync();
         var lines = new List<string>
         {
             $"- **Provider**: {provider.Label} (`{provider.BaseUrl}`)",
             $"- **Model**: `{provider.Model}`",
-            $"- **Local server**: {(_llama.IsHealthy ? "up" : "down")}" +
-            (provider.IsLocal ? "" : $" (the local server is {_llama.IsHealthy}, " +
+            $"- **Local server**: {(up ? "up" : "down")}" +
+            (provider.IsLocal ? "" : $" (the local server is {(up ? "up" : "down")}, " +
                                  $"but the active provider is {provider.Name})"),
             $"- **Context**: {_cfg.Llama.Context.CtxSize} tokens",
             $"- **Tools**: {(_aiTools.Checked ? "file tools on" : "file tools off")}" +
@@ -3366,7 +3367,7 @@ capabilities = [ ""tool_use"" ]
         var provider = _providers.ActiveProvider();
         var local = provider.IsLocal;
 
-        if (local && !_llama.IsHealthy)
+        if (local && !await _llama.IsHealthyAsync())
         {
             AppendAi("[notecode] the local server is not running. Start it from Run > Start llama server.", "warn");
             return;
@@ -3410,21 +3411,11 @@ capabilities = [ ""tool_use"" ]
             new("system", BuildSystemPrompt())
         };
 
-        // The last few exchanges, so the model remembers what was just said. They
-        // come straight after the system prompt and only ever grow at the end, so
-        // the server's prompt cache keeps the earlier ones.
-        messages.AddRange(_chatHistory);
-
-        // A skill loaded with /skill is context for this turn.
-        if (_pendingSkill is not null)
-        {
-            messages.Add(new ChatMessage("user",
-                $"[skill: {_pendingSkill.Name}]\n{_pendingSkill.Text}"));
-            _pendingSkill = null;
-        }
-
         // Give the model the editor's current buffer so it can talk about what
-        // the user is actually looking at.
+        // the user is actually looking at. It goes before the history: the server
+        // reuses the longest unchanged opening of the prompt, and the buffer only
+        // changes when the file does, while the history grows every turn. After
+        // the history, the buffer would be read again on every turn.
         if (_aiContext.Checked && _currentPath is not null && File.Exists(_currentPath))
         {
             try
@@ -3440,6 +3431,19 @@ capabilities = [ ""tool_use"" ]
                     $"[current editor buffer]\npath: {_currentPath}\ntype: {_types.Describe(_currentPath)}\n---\n{content}"));
             }
             catch { /* context is best-effort */ }
+        }
+
+        // The last few exchanges, so the model remembers what was just said. They
+        // only ever grow at the end, so the server's prompt cache keeps the
+        // earlier ones and a turn reads just the newest exchange.
+        messages.AddRange(_chatHistory);
+
+        // A skill loaded with /skill is context for this turn.
+        if (_pendingSkill is not null)
+        {
+            messages.Add(new ChatMessage("user",
+                $"[skill: {_pendingSkill.Name}]\n{_pendingSkill.Text}"));
+            _pendingSkill = null;
         }
 
         // The file the user attached. It is put in front of the model as its own
