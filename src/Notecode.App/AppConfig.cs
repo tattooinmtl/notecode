@@ -289,11 +289,15 @@ internal sealed class McpServerDef
     public bool OnDemand { get; set; }
 
     /// <summary>
-    /// For a server whose catalogue does not fit the local model's context: the
-    /// tools it is offered first, in this order. The rest follow, smallest first,
-    /// until the budget is spent. Names are without the server prefix.
+    /// The cloud provider and model to suggest when this server's tools cannot run
+    /// on the local model. REA's catalogue is 111,434 tokens, so /rea refuses the
+    /// local model and names these instead. Only a suggestion: the turn runs on the
+    /// active provider.
     /// </summary>
-    public List<string> LocalTools { get; set; } = new();
+    public string Provider { get; set; } = "";
+
+    /// <summary>The model on <see cref="Provider"/> to suggest.</summary>
+    public string Model { get; set; } = "";
 }
 
 internal sealed class KimiSection

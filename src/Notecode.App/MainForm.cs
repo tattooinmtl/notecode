@@ -2048,6 +2048,26 @@ capabilities = [ ""tool_use"" ]
             return;
         }
 
+        // REA is cloud only for now. Its 170 tool schemas are 111,434 tokens,
+        // nine times the local model's context, so a local turn cannot even hold
+        // the catalogue. The config names the cloud provider to suggest.
+        if (_providers.ActiveProvider().IsLocal)
+        {
+            var reaDef = _cfg.Mcp.Servers.GetValueOrDefault("rea");
+            var suggest = _providers.Find(reaDef?.Provider ?? "");
+            var how = suggest is null
+                ? "Switch to a cloud provider with `/provider <name>`"
+                : $"Switch with `/provider {suggest.Name}`" +
+                  (string.IsNullOrWhiteSpace(reaDef?.Model) ? "" : $" and `/model {reaDef.Model}`") +
+                  (suggest.HasToken ? "" : $" (add its token first with `/addprovider {suggest.Name}`)");
+
+            _chat.Note(
+                "**REA needs a cloud provider.** Its 170 tools take 111,434 tokens of schemas, far more than " +
+                $"the local model's {_cfg.Llama.Context.CtxSize:N0}-token context. {how}, then run `/rea` again.",
+                "notecode · rea");
+            return;
+        }
+
         var project = tokens[0];
         var destination = tokens[1];
         var actions = string.Join(" ", tokens.Skip(2));
@@ -3826,51 +3846,7 @@ capabilities = [ ""tool_use"" ]
         // own client as well (see LlamaServer.Dispatch), since llama-server
         // does not run REA any more.
         var rea = ToToolSpecs(await _mcp.ListToolsAsync(new[] { "rea" }, ct));
-        if (_providers.ActiveProvider().IsLocal) rea = FitToContext(rea, _cfg.Mcp.Servers.GetValueOrDefault("rea"));
         return baseSpecs.Concat(rea).ToList();
-    }
-
-    /// <summary>
-    /// The part of a big catalogue that fits the local model's context.
-    ///
-    /// The 170 REA schemas are 111,434 tokens (measured with the server's own
-    /// tokenizer), nine times the 12,288 context. The server's preferred tools
-    /// (<see cref="McpServerDef.LocalTools"/>) go first, in the order listed, and
-    /// then the smallest of the rest, until the schemas take 45% of the context.
-    /// The rest of the context is left for the prompt, the tool results and the
-    /// answer.
-    /// </summary>
-    private List<ToolSpec> FitToContext(List<ToolSpec> specs, McpServerDef? def)
-    {
-        // Compact JSON schemas run at about 3.96 characters a token on this
-        // tokenizer; 3.5 leaves a margin.
-        static int Tokens(ToolSpec s) => (int)Math.Ceiling(s.Definition.GetRawText().Length / 3.5);
-
-        var budget = (int)(_cfg.Llama.Context.CtxSize * 0.45);
-        var preferred = def?.LocalTools ?? new List<string>();
-        var ordered = preferred
-            .Select(n => specs.FirstOrDefault(s => s.Name == "rea_" + n || s.Name == n))
-            .OfType<ToolSpec>()
-            .Concat(specs.Where(s => !preferred.Any(n => s.Name == "rea_" + n || s.Name == n)).OrderBy(Tokens));
-
-        var kept = new List<ToolSpec>();
-        var used = 0;
-        foreach (var spec in ordered)
-        {
-            var cost = Tokens(spec);
-            if (used + cost > budget) continue;
-            kept.Add(spec);
-            used += cost;
-        }
-
-        if (kept.Count < specs.Count)
-        {
-            _chat.Note(
-                $"The local model gets {kept.Count} of the {specs.Count} REA tools (about {used:N0} tokens of " +
-                $"schemas). All of them are {specs.Sum(Tokens):N0} tokens, more than its {_cfg.Llama.Context.CtxSize:N0}-token " +
-                "context. A provider with a larger context gets the whole set.", "notecode · rea");
-        }
-        return kept;
     }
 
     /// <summary>

@@ -151,7 +151,7 @@ single tool (`compare_web_captures`) is 15,535 tokens. That is more than 3× the
 `/rea` on the local model never fit, before or after this work. Before the on-demand fix, it also
 made every later turn overflow.
 
-The local model now gets the tools in `mcp.servers.rea.localTools` (17 core analysis tools,
-about 4,800 tokens), then the smallest of the rest, up to 45% of the context. With the chat tools
-that comes to **6,914 prompt tokens** of the 12,288 context (verified on the server). A BYOK
-provider still gets the whole set.
+REA is therefore **cloud only for now**. `/rea` runs on the active provider and refuses the local
+model with a warning that suggests the cloud provider and model in `mcp.servers.rea`
+(`/provider minimax`, `MiniMax-M3.1-Flash`). A provider that is not set up yet gets a pointer to
+`/addprovider` in the same warning.
