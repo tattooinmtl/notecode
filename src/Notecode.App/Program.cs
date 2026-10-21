@@ -2,10 +2,33 @@ namespace Notecode.App;
 
 internal static class Program
 {
+    /// <summary>The process that started this one, or -1 for "whoever started me".</summary>
+    private const int AttachParentProcess = -1;
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AttachConsole(int processId);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AllocConsole();
+
     [STAThread]
     private static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+
+        // `notecode.exe --print-config [file]` writes the configuration the app
+        // resolved, as JSON.
+        //
+        // It is a diagnostic, and it exists because the configuration is
+        // written with %USERPROFILE% in the paths into the user's own folders
+        // and has to be expanded when it is read. This is how a user - or a
+        // test - sees what those paths turned into on this machine. It runs
+        // before anything else, so it answers even while the app is open.
+        if (args.Length > 0 && args[0].Equals("--print-config", StringComparison.OrdinalIgnoreCase))
+        {
+            PrintConfig(args.Length > 1 ? args[1] : null);
+            return;
+        }
 
         // One copy at a time. A second copy does not start: it brings the
         // one that is running - usually sitting in the notification area -
@@ -78,6 +101,63 @@ internal static class Program
         }
 
         Application.Run(main);
+    }
+
+    /// <summary>
+    /// Writes the configuration the app resolved, as JSON.
+    ///
+    /// These are the values the app is using, after the environment variables
+    /// in them have been expanded. A path that did not resolve shows up here
+    /// as it is - still carrying its %VARIABLE% - instead of quietly turning
+    /// into a folder that is named after the variable.
+    /// </summary>
+    private static void PrintConfig(string? file)
+    {
+        AppConfig cfg;
+        try
+        {
+            cfg = AppConfig.Load();
+        }
+        catch (Exception ex)
+        {
+            WriteOut(file, "{\"error\": " + System.Text.Json.JsonSerializer.Serialize(ex.Message) + "}");
+            return;
+        }
+
+        var json = System.Text.Json.JsonSerializer.Serialize(cfg, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true
+        });
+        WriteOut(file, json);
+    }
+
+    /// <summary>
+    /// Puts the output where it was asked for: in a file, or on the console.
+    /// </summary>
+    private static void WriteOut(string? file, string text)
+    {
+        if (!string.IsNullOrWhiteSpace(file))
+        {
+            try { File.WriteAllText(file, text); }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); }
+            return;
+        }
+
+        // The app is a window, so it has no console of its own. The console of
+        // whoever started it is borrowed for the length of the write, and a
+        // new one is opened if there was none to borrow.
+        try
+        {
+            if (!AttachConsole(AttachParentProcess)) AllocConsole();
+            using var stdout = Console.OpenStandardOutput();
+            var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+            stdout.Write(bytes, 0, bytes.Length);
+        }
+        catch
+        {
+            // There was nowhere to print to. The file form of the command is
+            // there for exactly this case.
+        }
     }
 
     /// <summary>

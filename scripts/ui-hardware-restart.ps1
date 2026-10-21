@@ -97,8 +97,9 @@ Check 'a new instance started' ($null -ne $new) $(if ($new) { "pid $($new.Id)" }
 
 if ($new) {
     # The new instance has to be running the profile that was saved, not the
-    # one it had before.
-    $store = Join-Path $env:APPDATA 'notecode\hardware-profiles.json'
+    # one it had before. The app writes its data where NOTECODE_DATA_DIR says,
+    # and the test points that at a profile of its own.
+    $store = Join-Path (Get-AppDataDir) 'hardware-profiles.json'
     $saved = $null
     if (Test-Path $store) {
         $saved = (Get-Content $store -Raw | ConvertFrom-Json).profiles |

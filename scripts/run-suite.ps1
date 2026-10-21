@@ -33,6 +33,7 @@ $suite = @(
     @{ name = 'hardware';    script = 'ui-hardware.ps1';        slow = $false },
     @{ name = 'tray';        script = 'ui-tray.ps1';            slow = $false },
     @{ name = 'installer';   script = 'ui-installer.ps1';       slow = $false },
+    @{ name = 'config';      script = 'ui-config.ps1';          slow = $false },
     @{ name = 'byok';        script = 'ui-byok-turn.ps1';       slow = $false },
     @{ name = 'tool-smoke';  script = 'ui-tool-smoke.ps1';      slow = $true },
     @{ name = 'agent-files'; script = 'ui-agent-files.ps1';     slow = $true },

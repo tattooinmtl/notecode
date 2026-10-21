@@ -14,7 +14,12 @@ $ErrorActionPreference = 'Continue'
 
 $root = 'C:\NexusOne\prototypes\notecode'
 $wrapper = Join-Path $root 'runtime\notecode-llama.ps1'
-$probe = 'C:\Users\ThePa\.brain-skills\skills\zz-probe'
+
+# The probe goes into the skills folder the app uses, because write_skill only
+# writes there. It is read out of the configuration rather than written down,
+# so the same script works on every machine.
+. (Join-Path $root 'scripts\winutil.ps1')
+$probe = Join-Path (Get-NotecodeConfig).skills.roots[0] 'zz-probe'
 $base = 'http://127.0.0.1:8080'
 
 New-Item -ItemType Directory -Force -Path $probe | Out-Null

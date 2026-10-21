@@ -111,22 +111,14 @@ Set-Prompt $promptBox 'What is the secret word in the attached file? Answer with
 Send-KeyToControl -Hwnd $editHwnd -VirtualKey $script:VK_RETURN
 Write-Output "sent the question; waiting for the model"
 
-# The transcript is a WebView2, so its text is exposed to UI Automation.
-function Find-TextWith([string]$needle) {
-    $cond = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::Text)
-    $all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-    foreach ($t in $all) {
-        if ($t.Current.Name -like "*$needle*") { return $t }
-    }
-    return $null
-}
+# The transcript is a WebView2, so its text is exposed to UI Automation. The
+# search lives in winutil.ps1, where it survives a tree that is rebuilt under
+# it.
 
 $answer = $null
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 while ((Get-Date) -lt $deadline) {
-    $answer = Find-TextWith $secret
+    $answer = Find-TextWith -Window $win -ProcessId $proc.Id -Needle $secret
     if ($answer) { break }
     Start-Sleep -Seconds 3
 }

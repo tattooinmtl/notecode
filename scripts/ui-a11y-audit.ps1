@@ -41,24 +41,43 @@ $all = $win.FindAll(
     [System.Windows.Automation.Condition]::TrueCondition)
 
 $rows = @()
+$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
 foreach ($e in $all) {
     try {
         $c = $e.Current
         $r = $e.Current.BoundingRectangle
 
-        # The parent, so that a control that belongs to a scroll bar can be
-        # told apart from one the app draws itself.
-        $parent = ''
+        # The ancestors, so that a control that belongs to a scroll bar, or
+        # that is part of the text in the transcript, can be told apart from
+        # one the app draws itself.
+        #
+        # The walker is used rather than AutomationElement.Parent. Parent
+        # answers with an element whose control type is empty on this window,
+        # so a chain built from it is empty and every rule that reads it
+        # silently stops working.
+        #
+        # The whole chain is kept, not just the direct parent: the scroll
+        # bar's arrow buttons hang off the scroll bar on one build and off
+        # the control that owns it on another, and the audit has to recognise
+        # them either way - otherwise the system's own buttons are counted
+        # against the app.
+        $chain = @()
         try {
-            $p = $c.Parent
-            if ($p) { $parent = $p.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '' }
+            $p = $walker.GetParent($e)
+            $depth = 0
+            while ($p -and $depth -lt 8) {
+                $chain += ($p.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '')
+                $p = $walker.GetParent($p)
+                $depth++
+            }
         } catch { }
 
         $rows += [pscustomobject]@{
             Type     = $c.ControlType.ProgrammaticName -replace '^ControlType\.', ''
             Name     = $c.Name
             Role     = $c.LocalizedControlType
-            Parent   = $parent
+            Parent   = $(if ($chain.Count -gt 0) { $chain[0] } else { '' })
+            Chain    = $chain
             X        = [int]$r.X
             Y        = [int]$r.Y
             W        = [int]$r.Width
@@ -89,7 +108,13 @@ $lines += ""
 $lines += "| Type | Size | Focusable |"
 $lines += "|---|---|---|"
 $unnamed = $rows | Where-Object {
-    $_.Name -eq '' -and $_.Type -in @('Button','CheckBox','RadioButton','ComboBox','Hyperlink','SplitButton','MenuItem','Tab','Tree','List','Edit')
+    $_.Name -eq '' -and $_.Type -in @('Button','CheckBox','RadioButton','ComboBox','Hyperlink','SplitButton','MenuItem','Tab','Tree','List','Edit') -and
+    # A list inside the transcript is the text the app is showing, not a
+    # control the user operates. Its items carry the content, and a screen
+    # reader reads them one by one; naming the list itself would be noise.
+    # A list that stands on its own - a list the user picks from - still
+    # needs a name.
+    -not ($_.Type -eq 'List' -and $_.Chain -contains 'Document')
 }
 foreach ($u in $unnamed) { $lines += "| $($u.Type) | $($u.W)x$($u.H) | $($u.Focus) |" }
 if (-not $unnamed) { $lines += "| _(none)_ | | |" }
@@ -106,13 +131,15 @@ $lines += "|---|---|---|"
 
 # The scroll bar's own arrow buttons are the system's, at the system's size.
 # They are not drawn by the app and they are not what the app's own controls
-# are measured against, so they are listed but not counted as a failure.
+# are measured against, so they are listed but not counted as a failure. The
+# whole ancestor chain is looked at, because where the buttons hang off the
+# scroll bar is up to the control that owns it.
 $small = $rows | Where-Object {
     $_.W -gt 0 -and $_.H -gt 0 -and ($_.W -lt $minPointer -or $_.H -lt $minPointer) -and
     $_.Type -in @('Button','CheckBox','RadioButton','ComboBox','SplitButton')
 }
-$systemSmall = @($small | Where-Object { $_.Parent -eq 'ScrollBar' })
-$ownSmall = @($small | Where-Object { $_.Parent -ne 'ScrollBar' })
+$systemSmall = @($small | Where-Object { $_.Chain -contains 'ScrollBar' })
+$ownSmall = @($small | Where-Object { $_.Chain -notcontains 'ScrollBar' })
 
 foreach ($s in $small) { $lines += "| $($s.Type) | $($s.Name) | $($s.W)x$($s.H) |" }
 if (-not $small) { $lines += "| _(none)_ | | |" }

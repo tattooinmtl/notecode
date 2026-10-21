@@ -221,9 +221,7 @@ internal sealed class HardwareProfileStore
 
     public static string DefaultPath()
     {
-        var root = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        if (string.IsNullOrEmpty(root)) root = Path.GetTempPath();
-        return Path.Combine(root, "notecode", "hardware-profiles.json");
+        return Path.Combine(AppPaths.DataDir, "hardware-profiles.json");
     }
 
     public HardwareProfile? Active =>

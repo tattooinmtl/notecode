@@ -27,6 +27,8 @@
     <Compile Include="..\Notecode.App\BackendSelector.cs" Link="BackendSelector.cs" />
     <Compile Include="..\Notecode.App\HardwareProfile.cs" Link="HardwareProfile.cs" />
     <Compile Include="..\Notecode.App\HardwareScanner.cs" Link="HardwareScanner.cs" />
+    <!-- Where the user data lives. HardwareProfile refers to it. -->
+    <Compile Include="..\Notecode.App\AppPaths.cs" Link="AppPaths.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 

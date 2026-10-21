@@ -97,6 +97,8 @@ workspace/
 rea/findings/
 assets/preview/
 assets/_*
+# Scratch folders for a throwaway probe.
+.tmp-*/
 
 # ------------------------------------------------------------------- markdown
 # Ignored, with the files the app binds kept.

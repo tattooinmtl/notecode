@@ -129,8 +129,7 @@ internal sealed class SessionStore
     private SessionStore() { }
 
     /// <summary>Where the session files are.</summary>
-    public static string Root => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "notecode", "sessions");
+    public static string Root => Path.Combine(AppPaths.DataDir, "sessions");
 
     /// <summary>Reads every session on disk. A file that cannot be read is skipped.</summary>
     public static SessionStore Load()

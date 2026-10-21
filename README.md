@@ -93,6 +93,24 @@ The app writes a diagnostics log to `runtime\notecode-app.log` — terminal even
 startup, WebView2 message traffic. It is the first place to look when something is
 blank.
 
+### Asking the app what it resolved
+
+The paths in `runtime\notecode.config.json` that point into your own folders are written
+as `%USERPROFILE%\...`, so that one file works on every machine. The app expands them
+when it reads it — and it can be asked what they turned into:
+
+```powershell
+# on the console
+.\dist\notecode.exe --print-config
+
+# or into a file, which is the form the test uses
+.\dist\notecode.exe --print-config $env:TEMP\notecode-config.json
+```
+
+A path that did not expand is worth knowing about: it is the name of a folder the app
+would create, called `%USERPROFILE%`. `scripts\ui-config.ps1` is the check, and it takes
+two seconds.
+
 ### The AI panel
 
 The agent lives in a 420 px panel on the right: an aurora header, the conversation, the
@@ -374,6 +392,19 @@ Install it with `/addskills skills\blender-scene\SKILL.md`.
 Blender has to be running for any of this to work. When it is not, the app retries the
 server every ten seconds and says so in the transcript.
 
+For the tests, Blender does not have to be open on your desktop. The server can be
+brought up in a headless Blender, with the add-on enabled for that session only, so
+nothing appears on your screen and your Blender preferences are not touched:
+
+```powershell
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background `
+    --python 'C:\NexusOne\prototypes\notecode\scripts\blender-mcp-headless.py'
+```
+
+It serves the same 26 tools. The tools that touch `bpy` need Blender's main thread, so
+this is enough for the catalogue and not for driving a scene — for that, open Blender
+and press **Start**.
+
 ---
 
 ## Accessibility
@@ -404,6 +435,27 @@ text is 10 point, which is the floor Microsoft sets for WinForms text.
 What is **not** there yet is in `finalAudit.md` — the high-contrast theme, the custom
 painting at a scaled display, and the contents of the tab strip, which a screen reader
 cannot enumerate yet.
+
+---
+
+## The tests
+
+```powershell
+.\scripts\run-suite.ps1              # everything
+.\scripts\run-suite.ps1 -SkipSlow    # everything that does not need the model
+.\scripts\run-suite.ps1 -Only tray   # one script
+```
+
+The GUI scripts drive the real window through UI Automation, and each one runs the app
+against **a profile of its own** — `NOTECODE_DATA_DIR` points it at a temporary folder.
+That matters more than it sounds: the app puts the last conversation back on screen when
+it starts, so a test that shared the user's profile would read the previous run's
+conversation as if it were its own, and a word it looked for in the transcript could be
+left over from a run that finished an hour ago. With a profile of its own, the transcript
+a test reads is the one that test caused.
+
+The same variable is what a portable install would use to keep its data beside the
+program instead of in `%APPDATA%\notecode`.
 
 ---
 
@@ -967,7 +1019,7 @@ The status bar shows the detected type of the active file (`md · text/x-markdow
 ## Pointing kimi-code at the local model
 
 `Run ▸ Copy model config for kimi` writes `runtime/kimi-local-provider.toml`. Append it to
-`C:\Users\ThePa\.kimi-code\config.toml`:
+`%USERPROFILE%\.kimi-code\config.toml`:
 
 ```toml
 [providers.notecode-local]

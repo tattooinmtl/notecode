@@ -331,6 +331,38 @@ wrapper is the single writer of the llama argv; the app shells out to the wrappe
 than duplicating the argument list, so the GUI and the CLI can never disagree about how
 the model is started.
 
+### 4.5a The paths in the config are written with %USERPROFILE% in them
+
+A path into the user's own folders — the search key, the skills, the kimi-code install —
+is written once, in the file that is committed to the repository, and it has to work on
+every machine. So it is written as `%USERPROFILE%\.brain-skills\skills` and expanded when
+it is read: by the app, by the PowerShell wrapper, by the MCP server, and by the scripts.
+
+**The expansion happens on the way in, while the file is being read.** That is not a
+detail. The first version expanded the *text* of the file instead: it parsed the JSON
+into a node tree, walked it, expanded every string and wrote it back. A configuration
+file with the same key twice is legal JSON but not a legal node tree — parsing it throws
+*an item with the same key has already been added* — and the pass that expands the file
+failed on a file that was otherwise perfectly good. The catch swallowed the exception and
+used the file as it was.
+
+Nothing said so. The skills root stayed `%USERPROFILE%\.brain-skills\skills`, and
+`Path.Combine` made a folder of it — a folder literally named `%USERPROFILE%`, under the
+working directory. A skill installed through `/addskills` went there, and `/skills` could
+not find it, because `/skills` looked in the real place.
+
+A `JsonConverter<string>` does the expansion now, as each string is read. It sees every
+string in every object and every array, so a path field added later is expanded too
+instead of being the one field that was forgotten; and it does not care that the file has
+a repeated key, because the reader takes the last one, the same way every other reader
+of the file does.
+
+The app can be asked what it resolved: `notecode.exe --print-config` writes the
+configuration it is actually using, after the expansion, as JSON. It is how a user — or a
+test — sees that a path did not resolve. `scripts/ui-config.ps1` is the guard, and it
+takes two seconds instead of the forty minutes the full suite needs to notice the same
+thing.
+
 ### 4.6 The design system
 
 `Theme.cs` holds the palette, the fonts and the window chrome; `ThemeControls.cs`
@@ -1257,6 +1289,30 @@ Three things about them are deliberate:
   text and the file does not need to be current to the last character. The
   write itself is to a temporary file that is moved into place, so a crash
   halfway through cannot leave a half written session behind.
+
+### 4.21a Where the user's data lives
+
+The conversations and the saved hardware profiles are the user's, not the
+checkout's, so they live in `%APPDATA%\notecode` and nowhere else. One place
+decides that: `AppPaths.DataDir`.
+
+`NOTECODE_DATA_DIR` moves it. The reason is the tests.
+
+**The app puts the last conversation back on screen when it starts.** A test
+that launches it against the user's own profile therefore reads the previous
+run's conversation as if it were its own: a word that a check looks for in the
+transcript can be left over from a run that finished an hour ago, and the check
+passes without proving anything. The same tests also leave their own
+conversations in the user's list to find later.
+
+So the scripts point `NOTECODE_DATA_DIR` at a folder of their own, and every
+test starts with an empty transcript. What a test reads is what the test
+caused. The folder is also what a portable install would use to keep its data
+beside the program instead of in the profile.
+
+Note that `%APPDATA%` itself would not have done: `Environment.GetFolderPath`
+on Windows goes through the known-folder API and does not follow the
+environment variable, so the folder has to be chosen by the app.
 
 ## 4.22 The installer
 

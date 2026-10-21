@@ -112,12 +112,7 @@ Check "the conversation can be read back" ($conversation -like "*$noteWord*") 't
 
 # The note has to be on screen too, not only in the app's own copy of it.
 Start-Sleep -Seconds 2
-$cond = New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [System.Windows.Automation.ControlType]::Text)
-$all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-$seen = $false
-foreach ($t in $all) { if ($t.Current.Name -like "*$noteWord*") { $seen = $true; break } }
+$seen = $null -ne (Find-TextWith -Window $win -ProcessId $proc.Id -Needle $noteWord)
 Check "the note is visible in the transcript" $seen 'the note is on screen'
 
 & (Join-Path $root 'scripts\screenshot.ps1') -Out (Join-Path $shots 'notecode-ai-reach.png') -ProcessName notecode | Out-Null

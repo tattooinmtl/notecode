@@ -363,6 +363,91 @@ All five are fixed, and `scripts/ui-hardware.ps1` checks the result: the splash
 appears, the scan finds the processor, the page offers the four builds, the
 status bar names the backend, and the profile is saved.
 
+### 6.10.6 A repeated key in the config file silently turned off every path in it
+
+The config file carries paths into the user's own folders written as
+`%USERPROFILE%\.brain-skills\skills`, and every reader of it expands them: the app, the
+PowerShell wrapper, the MCP server, the scripts. The app's expansion was a pass over the
+*text* of the file — parse it into a node tree, walk it, expand every string, write it
+back.
+
+A configuration file with the same key twice is legal JSON but not a legal node tree.
+`runtime/notecode.config.json` had two `"$comment"` keys in its `memory` section, so the
+parse threw *an item with the same key has already been added*, the `catch` around the
+whole pass swallowed it, and the file was used exactly as it was written.
+
+Nothing failed and nothing was logged. The skills root stayed
+`%USERPROFILE%\.brain-skills\skills`, and `Path.Combine` turned that into a folder named
+after the variable — a folder literally called `%USERPROFILE%`, created under the
+working directory. `/addskills` installed the skill into it. `/skills` looked in the
+real place and did not find it.
+
+The failing check said *"the skill was installed — it is in a skill folder"*, and the
+skill *was* installed, into a folder with a variable in its name. The other checks in the
+same run passed, because they did not care where the skill went.
+
+Two things are fixed.
+
+The expansion happens on the way in now, as each string is read, with a
+`JsonConverter<string>`. A reader that takes the last of a repeated key does not mind
+one, and a converter sees every string without a list of the fields that hold a path.
+
+The file itself no longer has the repeated key.
+
+The guard is `scripts/ui-config.ps1`, and it is fast: the app is asked what it resolved
+(`notecode.exe --print-config`), and the answer is checked for a path that is still a
+variable. It was run against a build without the expansion first, and it failed with
+*still unexpanded: %USERPROFILE%*; it passed once the fix was back. A guard that has only
+ever passed proves nothing.
+
+### 6.10.7 A guard that had stopped guarding
+
+The accessibility audit had a rule about the size of the things a person has to hit. It
+excluded the scroll bar's own arrow buttons, because they are the system's, at the
+system's size, and the app does not draw them.
+
+The exclusion read the parent of the control to see whether it was a scroll bar. It used
+`AutomationElement.Parent`, and on this window that answers with an element whose control
+type is **empty**. So the parent was never `ScrollBar`, the exclusion never fired, and
+the system's own arrow buttons were counted against the app — three failures that had
+nothing to do with the app and that only appeared once the workspace held enough files
+for the tree to have a scroll bar at all.
+
+It was the `TreeWalker` that answered correctly all along. The audit uses it now, and
+walks the whole chain rather than the direct parent, because where the buttons hang off
+the scroll bar is up to the control that owns it.
+
+Two other rules in the same audit were reading the same empty chain: a list inside the
+transcript was reported as a control with no name, when it is the text the app is showing
+— its items carry the content, and a screen reader reads them one by one.
+
+And the version check in the tray script was a tautology: it compared the literal
+`0.2.0` against a regular expression, so it passed whatever the build did. It reads the
+version out of the executable now and checks that the transcript shows that one.
+
+### 6.10.8 The tests were reading each other's conversations
+
+The app puts the last conversation back on screen when it starts — that is the feature,
+and it is a good one. The tests launched the app against the user's own profile, so
+every GUI test started with the previous test's conversation on screen.
+
+A check that looks for a word in the transcript could therefore find a word that a run
+from an hour ago had left there, and pass without proving anything. The checks that
+looked for *the last run's* markers — the skill fixer's report, the MCP server's
+connection message — were the ones at risk, and they were passing for a reason that had
+nothing to do with what they claimed to check.
+
+`NOTECODE_DATA_DIR` now points the app at a folder of the test's own, so every test
+starts with an empty transcript. What a test reads is what the test caused. It also
+stops the tests from writing their conversations into the user's list to find later.
+
+The same investigation found that the Blender checks were failing for a reason that was
+not notecode's: Blender is a desktop application of its own, and its server only listens
+while it is open. Not having it open is not a fault of the app, so those checks skip
+instead of failing — the same way the BYOK turn treats it. The check for the connection
+now looks for the message the app writes when it connects, rather than for the server's
+name, which appears in the failure message too.
+
 ---
 
 These are real, and they are not fixed. Each one says what it would take.

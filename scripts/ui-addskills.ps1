@@ -90,17 +90,10 @@ Set-Prompt $promptBox "/addskills `"$skillFile`""
 Send-KeyToControl -Hwnd $editHwnd -VirtualKey $script:VK_RETURN
 Write-Output "sent /addskills; waiting for the fixer"
 
-# The transcript is a WebView2, so its text is exposed to UI Automation.
-function Find-TextWith([string]$needle) {
-    $cond = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::Text)
-    $all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-    foreach ($t in $all) {
-        if ($t.Current.Name -like "*$needle*") { return $t }
-    }
-    return $null
-}
+# The transcript is a WebView2, so its text is exposed to UI Automation. The
+# search itself lives in winutil.ps1: the tree under the window is rebuilt
+# whenever the window repaints, and a search that holds an element from the
+# old tree throws "Unrecognized error" instead of finding nothing.
 
 # The report comes at the end, so the last one is the one to wait for.
 #
@@ -112,14 +105,14 @@ $report = $null
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 while ((Get-Date) -lt $deadline) {
     foreach ($ending in $endings) {
-        $found = Find-TextWith $ending
+        $found = Find-TextWith -Window $win -ProcessId $proc.Id -Needle $ending
         if ($found) { $report = $found; break }
     }
     if ($report) { break }
     Start-Sleep -Seconds 3
 }
 
-Check "the fixer reported back" ($null -ne (Find-TextWith 'Skill fixer')) "the transcript has the report"
+Check "the fixer reported back" ($null -ne (Find-TextWith -Window $win -ProcessId $proc.Id -Needle 'Skill fixer')) "the transcript has the report"
 Check "the fixer finished" ($null -ne $report) "the report says where the skill went"
 & (Join-Path $root 'scripts\screenshot.ps1') -Out (Join-Path $shots 'notecode-addskills.png') -ProcessName notecode | Out-Null
 
@@ -159,7 +152,10 @@ Check "the skill names tools that exist" ($unknown.Count -eq 0 -and $named.Count
 Check "the skill kept its instructions" ($fixed -match 'sources|look|write') 'the body still says what to do'
 
 # --- the skill was installed --------------------------------------------------
-$installed = Get-ChildItem -Path 'C:\Users\ThePa\.brain-skills\skills' -Filter 'SKILL.md' -Recurse -ErrorAction SilentlyContinue |
+# Where the app puts the skills, read out of the configuration rather than
+# written down, so the test looks in the same place on every machine.
+$skillsRoot = (Get-NotecodeConfig).skills.roots[0]
+$installed = Get-ChildItem -Path $skillsRoot -Filter 'SKILL.md' -Recurse -ErrorAction SilentlyContinue |
     Where-Object { $_.Directory.Name -eq $skillName }
 Check "the skill was installed" ($null -ne $installed) "it is in a skill folder"
 
@@ -168,16 +164,25 @@ Set-Prompt $promptBox '/skills'
 Send-KeyToControl -Hwnd $editHwnd -VirtualKey $script:VK_RETURN
 Start-Sleep -Seconds 4
 
-$listed = Find-TextWith 'Skills'
+$listed = Find-TextWith -Window $win -ProcessId $proc.Id -Needle 'Skills'
 Check "/skills lists the skill" ($null -ne $listed) 'the list came back'
 
 Get-Process -Name notecode -ErrorAction SilentlyContinue | Stop-Process -Force
 
 # --- clean up the skill this test installed ------------------------------------
-$installedDir = Join-Path 'C:\Users\ThePa\.brain-skills\skills' $skillName
+$installedDir = Join-Path $skillsRoot $skillName
 if (Test-Path $installedDir) {
     Remove-Item -Path $installedDir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Output "removed the installed test skill"
+}
+
+# A build that does not expand %USERPROFILE% installs the skill into a folder
+# that is named after the variable, under the working directory. It is litter
+# either way, so it goes.
+$literal = Join-Path $root 'dist\%USERPROFILE%'
+if (Test-Path $literal) {
+    Remove-Item -Path $literal -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Output "removed the unexpanded %USERPROFILE% folder"
 }
 
 Write-Output ""

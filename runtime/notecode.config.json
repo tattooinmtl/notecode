@@ -81,7 +81,7 @@
     "modelGiB": 19.71,
     "reserveGiB": 1.0,
     "warnFreeSystemGiB": 6.0,
-    "$comment": "Physical RAM is 28.9 GiB. Model is 19.71 GiB mmap. Other processes currently hold ~13 GiB, so the system must be at ~6 GiB free before the server can hold its working set without paging."
+    "$comment2": "Physical RAM is 28.9 GiB. Model is 19.71 GiB mmap. Other processes currently hold ~13 GiB, so the system must be at ~6 GiB free before the server can hold its working set without paging."
   },
 
   "mcp": {

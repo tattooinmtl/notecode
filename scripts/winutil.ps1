@@ -267,6 +267,85 @@ function Set-AppForeground {
     if ($fg -ne $me) { [void][Win32Shot]::AttachThreadInput($me, $fg, $false) }
 }
 
+# --- a profile of the test's own ------------------------------------------------
+#
+# notecode keeps the user's data - the conversations, the saved hardware
+# profiles - under %APPDATA%\notecode, and it puts the last conversation back
+# on screen when it starts.
+#
+# A test that shares that profile therefore reads the previous run's
+# conversation as if it were its own: a word that a check looks for in the
+# transcript can be left over from a run that finished an hour ago, and the
+# check passes without proving anything. It also leaves its own conversation
+# behind for the next test, and for the user to find later.
+#
+# NOTECODE_DATA_DIR moves the folder the app keeps its data in. It is set here,
+# once, and every script that loads this file gets a profile of its own - so
+# the transcript a test reads is the one that test caused, and the user's own
+# sessions are not written over.
+$script:TestProfile = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ("notecode-test-profile-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $script:TestProfile -Force | Out-Null
+# Set once per process. screenshot.ps1 loads this file too, and a script that
+# loads it twice must not end up with two profiles: the app is launched with
+# the first one, and a second launch would use the other.
+if (-not $env:NOTECODE_DATA_DIR) { $env:NOTECODE_DATA_DIR = $script:TestProfile }
+
+function Get-AppDataDir {
+    <#
+      .SYNOPSIS
+        The folder the app keeps the user's data in.
+      .NOTES
+        It is NOTECODE_DATA_DIR when that is set - the tests set it, so the
+        app writes to a profile of the test's own - and %APPDATA%\notecode
+        otherwise. A test that wants to read what the app wrote has to look
+        where the app wrote it.
+    #>
+    if ($env:NOTECODE_DATA_DIR) { return $env:NOTECODE_DATA_DIR }
+    return (Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'notecode')
+}
+
+function New-TestSession {
+    <#
+      .SYNOPSIS
+        Writes a session into the app's data folder, so a test has one to work with.
+      .NOTES
+        The session window lists what is on disk. A test that starts from an
+        empty profile has nothing to list; a test that starts from the user's
+        profile lists whatever the user happened to have, which is not a
+        fixture and is not the same from one run to the next.
+
+        The file is the app's own format: one file per session, named after
+        the session's id.
+    #>
+    param(
+        [string]$Title = 'a session for the test',
+        [string]$Workspace = ''
+    )
+
+    $dir = Join-Path (Get-AppDataDir) 'sessions'
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+    $id = 'test-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $now = [DateTime]::UtcNow.ToString('o')
+    $session = [ordered]@{
+        Id         = $id
+        Title      = $Title
+        CreatedUtc = $now
+        UpdatedUtc = $now
+        Pinned     = $false
+        Workspace  = $Workspace
+        Messages   = @(
+            [ordered]@{ Role = 'user';      Text = $Title;                          AtUtc = $now }
+            [ordered]@{ Role = 'assistant'; Text = 'this session was written by a test'; AtUtc = $now }
+        )
+    }
+
+    $path = Join-Path $dir ($id + '.json')
+    Set-Content -Path $path -Value ($session | ConvertTo-Json -Depth 6 -Compress) -Encoding utf8
+    return $id
+}
+
 # --- UI Automation -----------------------------------------------------------
 #
 # The scripts drive the app through UI Automation rather than through the mouse,
@@ -335,6 +414,66 @@ function Find-ByName {
         return $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $both)
     }
     return $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+}
+
+function Find-TextWith {
+    <#
+      .SYNOPSIS
+        The first text element under a window whose text contains a string.
+      .NOTES
+        The tree under a window is rebuilt whenever the window repaints, and an
+        element from the tree that was there a moment ago throws "Unrecognized
+        error" when it is touched. A stale tree is a normal event in a window
+        that is busy drawing, not a failure of the app, so the window is looked
+        up again and the search is done once more.
+
+        The text is matched without a wildcard pattern on purpose. The
+        transcript holds backticks and asterisks, and in a -like pattern both
+        mean something other than themselves: a backtick is the escape
+        character and an asterisk matches anything.
+    #>
+    param(
+        $Window,
+        [int]$ProcessId = 0,
+        [Parameter(Mandatory = $true)][string]$Needle
+    )
+
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        $root = $Window
+        if ($attempt -gt 0 -and $ProcessId -gt 0) {
+            $root = Get-AppAutomationRoot -ProcessId $ProcessId
+            if (-not $root) { return $null }
+        }
+
+        try {
+            # Every descendant, not only the text ones.
+            #
+            # The transcript is a web surface, and a line that it rendered as
+            # a list item carries its words in the list item's name rather
+            # than in a text element - the version line, for one. A search
+            # that only looked at text elements would not find it, and would
+            # report that the app had not printed it.
+            $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition)
+        } catch {
+            # The tree was rebuilt while the search was running. Ask again with
+            # a window that is looked up now.
+            continue
+        }
+
+        foreach ($t in $all) {
+            try {
+                $name = $t.Current.Name
+                if ($name -and $name.IndexOf($Needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $t }
+            } catch {
+                # This element belongs to the tree that was just replaced. The
+                # next one may not.
+            }
+        }
+        return $null
+    }
+
+    return $null
 }
 
 function Get-PromptBox {

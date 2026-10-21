@@ -51,6 +51,12 @@ if (Test-Path $icoPath) {
 }
 
 # --- launch -----------------------------------------------------------------
+# The session window lists what is on disk. The test runs against a profile of
+# its own, which starts empty, so one session is written first - a fixture,
+# rather than whatever the user happened to have left behind.
+$seeded = New-TestSession -Title 'a session for the tray test'
+Write-Output "seeded the session $seeded"
+
 Get-Process -Name notecode -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 
@@ -98,9 +104,15 @@ Start-Sleep -Seconds 2
 Check "the version was written out" (Test-Path (Join-Path $ScreenshotDir 'notecode-version.png'))
 
 # The version has to be the one in the assembly, not a number written down
-# twice, so it is checked against the file the build produced.
-$asmVersion = '0.2.0'
-Check "the app reports a version" ($asmVersion -match '^\d+\.\d+\.\d+$') $asmVersion
+# twice, so it is read out of the file the build produced - and the number the
+# transcript shows has to be that one. A check against a literal here would
+# pass whatever the build did.
+$fileVersion = (Get-Item $exe).VersionInfo.FileVersion
+$asmVersion = if ($fileVersion) { ($fileVersion -replace '\.\d+$', '') } else { '' }
+Check "the build carries a version" ($asmVersion -match '^\d+\.\d+\.\d+$') "the file says $fileVersion"
+
+$shown = Find-TextWith -Window $win -ProcessId $proc.Id -Needle "notecode $asmVersion"
+Check "the app reports the version the build carries" ($null -ne $shown) $asmVersion
 
 # --- the sessions -----------------------------------------------------------
 Write-Output ""

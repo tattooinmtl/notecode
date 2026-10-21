@@ -39,12 +39,13 @@ internal sealed class AppConfig
     public static AppConfig Load(string? path = null)
     {
         path ??= Locate();
-        var json = ExpandEnvironmentVariables(File.ReadAllText(path));
+        var json = File.ReadAllText(path);
         var cfg = JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
             ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true
+            AllowTrailingCommas = true,
+            Converters = { new ExpandingStringConverter() }
         }) ?? throw new InvalidDataException("config deserialised to null");
 
         cfg.SourcePath = path;
@@ -53,65 +54,39 @@ internal sealed class AppConfig
     }
 
     /// <summary>
-    /// Expands %VARIABLE% in every string in the configuration.
+    /// Expands %VARIABLE% in a string as the configuration is read.
     ///
     /// A path to something in the user's own folders - the search key, the
     /// skills, the kimi-code install - is written once and has to work on
     /// every machine, so it is written with %USERPROFILE% in it. A variable
     /// that is not set is left exactly as it is, so a path that has no
     /// variable in it is not damaged.
+    ///
+    /// The expansion happens on the way in, while the file is being read, and
+    /// not on the text of the file before it is parsed. Two reasons, and both
+    /// of them were learned the hard way.
+    ///
+    /// The first is that a configuration file with the same key twice is legal
+    /// JSON but not a legal node tree: parsing it into a tree throws "an item
+    /// with the same key has already been added", and a pass that expands the
+    /// file by rewriting it fails on a file that is otherwise perfectly good.
+    /// The reader here does not mind a repeated key - it takes the last one -
+    /// so the file is read the same way by every other reader of it.
+    ///
+    /// The second is that a converter sees every string, in every object and
+    /// every array, without a list of the fields that happen to hold a path.
+    /// A path field added later is expanded too, instead of being the one
+    /// field that was forgotten.
     /// </summary>
-    public static string ExpandEnvironmentVariables(string json)
+    private sealed class ExpandingStringConverter : JsonConverter<string>
     {
-        try
-        {
-            var root = System.Text.Json.Nodes.JsonNode.Parse(json);
-            Expand(root);
-            return root?.ToJsonString() ?? json;
-        }
-        catch
-        {
-            // A configuration that cannot be walked is used as it is.
-            return json;
-        }
-    }
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => reader.TokenType == JsonTokenType.Null ? null : Expand(reader.GetString() ?? string.Empty);
 
-    private static void Expand(System.Text.Json.Nodes.JsonNode? node)
-    {
-        switch (node)
-        {
-            case System.Text.Json.Nodes.JsonObject obj:
-                foreach (var key in obj.Select(k => k.Key).ToList())
-                {
-                    var value = obj[key];
-                    if (value is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var s))
-                    {
-                        var expanded = Environment.ExpandEnvironmentVariables(s);
-                        if (!string.Equals(expanded, s, StringComparison.Ordinal)) obj[key] = expanded;
-                    }
-                    else
-                    {
-                        Expand(value);
-                    }
-                }
-                break;
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+            => writer.WriteStringValue(value);
 
-            case System.Text.Json.Nodes.JsonArray arr:
-                for (int i = 0; i < arr.Count; i++)
-                {
-                    var value = arr[i];
-                    if (value is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var s))
-                    {
-                        var expanded = Environment.ExpandEnvironmentVariables(s);
-                        if (!string.Equals(expanded, s, StringComparison.Ordinal)) arr[i] = expanded;
-                    }
-                    else
-                    {
-                        Expand(value);
-                    }
-                }
-                break;
-        }
+        private static string Expand(string text) => Environment.ExpandEnvironmentVariables(text);
     }
 
     [JsonIgnore] public string SourcePath { get; private set; } = "";
