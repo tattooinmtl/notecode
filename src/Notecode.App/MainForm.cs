@@ -177,14 +177,15 @@ internal sealed class MainForm : Form
     /// </summary>
     private int _conversationEpoch;
 
-    // The prompt budget of a chat turn with the local model. Context is costly on a
-    // CPU twice over: once to prefill it, and again on every token decoded, because
-    // the model attends over all of it. These keep an ordinary turn near 2k tokens.
-    private const int EditorContextChars = 6_000;
-    private const int ToolResultChars = 4_000;
-    private const int HistoryMessages = 8;
-    private const int HistoryChars = 6_000;
-    private const int HistoryMessageChars = 1_500;
+    // The prompt budget of a chat turn. Context is costly on a CPU twice over: once
+    // to prefill it, and again on every token decoded, because the model attends
+    // over all of it. The defaults keep an ordinary turn near 2k tokens; Settings >
+    // Chat & tools changes them (the chat section of the config).
+    private int EditorContextChars => _cfg.Chat.EditorContextChars;
+    private int ToolResultChars => _cfg.Chat.ToolResultChars;
+    private int HistoryMessages => _cfg.Chat.HistoryMessages;
+    private int HistoryChars => _cfg.Chat.HistoryChars;
+    private int HistoryMessageChars => _cfg.Chat.HistoryMessageChars;
 
     // The conversations of this machine, and the one being had right now.
     private readonly SessionStore _sessions;
@@ -223,6 +224,7 @@ internal sealed class MainForm : Form
         _types = FileTypes.Load(cfg.RuntimeDir);
         _providers = ProviderStore.Load(cfg.RuntimeDir);
         _hardwareStore = hardwareStore ?? HardwareProfileStore.Load();
+        _aiContext.Checked = cfg.Chat.EditorContext;
         _sessions = SessionStore.Load();
         // Carry on with the last conversation if there is one for this
         // workspace, so closing the window and opening it again does not
@@ -540,8 +542,20 @@ internal sealed class MainForm : Form
         tools.DropDownItems.Add("&MCP hub - list tools", null, async (s, e) => await ListMcpToolsAsync());
         tools.DropDownItems.Add("Connect &MCP servers", null, async (s, e) => await ConnectMcpAsync());
         tools.DropDownItems.Add("&REA reverse-engineer target...", null, async (s, e) => await ReaAnalyzeAsync());
-        tools.DropDownItems.Add(new ToolStripSeparator());
-        tools.DropDownItems.Add("&Hardware settings...", null, async (s, e) => await CmdSettingsAsync());
+
+        // Everything that can be changed while the app runs. Each item opens the
+        // settings window on its own page.
+        var settings = new ToolStripMenuItem("&Settings");
+        settings.DropDownItems.Add("&Providers...", null, (s, e) => ShowSettings(SettingsForm.ProvidersPage));
+        settings.DropDownItems.Add("&Agent (agents.md)...", null, (s, e) => ShowSettings(SettingsForm.AgentPage));
+        settings.DropDownItems.Add("&Model && reasoning...", null, (s, e) => ShowSettings(SettingsForm.ModelPage));
+        settings.DropDownItems.Add("P&erformance...", null, (s, e) => ShowSettings(SettingsForm.PerformancePage));
+        settings.DropDownItems.Add("&Chat && tools...", null, (s, e) => ShowSettings(SettingsForm.ChatPage));
+        settings.DropDownItems.Add("MCP &servers...", null, (s, e) => ShowSettings(SettingsForm.McpPage));
+        settings.DropDownItems.Add("&Editor && appearance...", null, (s, e) => ShowSettings(SettingsForm.EditorPage));
+        settings.DropDownItems.Add(new ToolStripSeparator());
+        settings.DropDownItems.Add("&Hardware...", null, async (s, e) => await CmdSettingsAsync());
+        settings.DropDownItems.Add("Open the &config file", null, (s, e) => OpenTab(_cfg.SourcePath));
 
         var help = new ToolStripMenuItem("&Help");
         help.DropDownItems.Add("&About", null, (s, e) => MessageBox.Show(this,
@@ -554,7 +568,7 @@ internal sealed class MainForm : Form
         help.DropDownItems.Add("&Version", null, (s, e) => MessageBox.Show(this,
             $"{AppInfo.Display}\r\n\r\nBuilt {BuildInfo.BuildStamp}", "notecode"));
 
-        strip.Items.AddRange(new ToolStripItem[] { file, edit, view, run, tools, help });
+        strip.Items.AddRange(new ToolStripItem[] { file, edit, view, run, tools, help, settings });
         return strip;
     }
 
@@ -1820,11 +1834,77 @@ internal sealed class MainForm : Form
     /// Puts the active provider and model in the status bar, so it is always obvious
     /// which endpoint a turn is going to.
     /// </summary>
+    /// <summary>
+    /// What the status bar says about the model, the way Claude shows "Opus 5.5 ·
+    /// medium": the model that answers the next turn and how it thinks. For the
+    /// local model that is the GGUF file that is loaded, not the server's alias.
+    /// </summary>
+    private string ModelLabel(ProviderDef provider)
+    {
+        if (provider.IsLocal)
+        {
+            var file = Path.GetFileNameWithoutExtension(_cfg.Llama.Model);
+            var name = string.IsNullOrEmpty(file) ? provider.Model : file;
+            var vision = _cfg.Llama.LoadMmproj ? " · vision" : "";
+            return $"{name} · reasoning {_cfg.Llama.Agent.Reasoning}{vision}";
+        }
+
+        var model = provider.Model.Length > 0 ? provider.Model : provider.Models.FirstOrDefault() ?? "no model";
+        return $"{provider.Label} · {model}";
+    }
+
+    private static string SettingsPageFor(string argument)
+    {
+        var a = argument.Trim().ToLowerInvariant();
+        if (a.Length == 0) return SettingsForm.ProvidersPage;
+        return SettingsForm.Pages.FirstOrDefault(p => p.ToLowerInvariant().StartsWith(a, StringComparison.Ordinal))
+               ?? SettingsForm.ProvidersPage;
+    }
+
+    /// <summary>Opens the settings window on one of its pages.</summary>
+    private void ShowSettings(string page)
+    {
+        var host = new SettingsHost(
+            LoadToolNames: async () =>
+                await _llama.IsHealthyAsync()
+                    ? (await _llama.GetToolsAsync(includeRea: false)).Select(t => t.Name).ToList()
+                    : new List<string>(),
+            RestartServer: RestartServerAsync,
+            OpenHardware: CmdSettingsAsync,
+            OpenFile: path => OpenTab(path),
+            ContextChanged: ctx =>
+            {
+                // The hardware profile's context is what the server is started
+                // with (it overrides the config), so it moves with the setting.
+                if (_hardwareStore.Active is { } profile)
+                {
+                    profile.CtxSize = ctx;
+                    _hardwareStore.Save();
+                }
+                if (_llama.Options is { } options) options.Ctx = ctx;
+            },
+            Applied: () =>
+            {
+                // Rebuilt on the next turn from the new settings.
+                _toolSpecsLoaded = false;
+                _byokToolSpecs = null;
+                _aiContext.Checked = _cfg.Chat.EditorContext;
+                UpdateStatusLabels();
+            },
+            ServerSettingsPending: () => _chat.Note(
+                "Saved. The server settings you changed apply the next time llama-server starts " +
+                "(Run > Restart llama server).", "notecode · settings"));
+
+        using var form = new SettingsForm(_cfg, _providers, host, page);
+        form.ShowDialog(this);
+    }
+
     private void UpdateStatusLabels()
     {
         var provider = _providers.ActiveProvider();
-        _stModel.Text = $"{provider.Name}: {provider.Model}";
+        _stModel.Text = ModelLabel(provider);
         _stModel.ForeColor = provider.IsLocal ? Theme.VioletBright : Theme.Cyan;
+        _stModel.ToolTipText = "The model answering the next turn. Click to change it.";
     }
 
     private async Task ListMcpToolsAsync()
@@ -2007,7 +2087,12 @@ capabilities = [ ""tool_use"" ]
             case "provider": CmdProvider(cmd.Arguments); break;
             case "providers": CmdProviders(); break;
             case "addprovider": CmdAddProvider(cmd.Arguments); break;
-            case "settings": await CmdSettingsAsync(); break;
+            case "settings":
+                // /settings hardware is the hardware page it has always been; on its
+                // own, or with another page, it opens the settings window.
+                if (cmd.Arguments.Trim().Equals("hardware", StringComparison.OrdinalIgnoreCase)) await CmdSettingsAsync();
+                else ShowSettings(SettingsPageFor(cmd.Arguments));
+                break;
             case "sessions": ShowSessionManager(); break;
             case "version": CmdVersion(); break;
             case "doctor": await CmdDoctorAsync(cmd.Arguments); break;
@@ -2997,7 +3082,8 @@ capabilities = [ ""tool_use"" ]
             {
                 var (handled, output) = await DispatchToolAsync(tool, args, token);
                 return handled ? output : $"[error] no tool called '{tool}'";
-            });
+            })
+            { Temperature = _cfg.Llama.Agent.Temperature };
     }
 
     /// <summary>
@@ -3539,7 +3625,40 @@ capabilities = [ ""tool_use"" ]
     /// The system prompt. It names the tools the way they are published, with the
     /// server in front, and it is kept short: it is read on every turn.
     /// </summary>
-    private static string BuildSystemPrompt() =>
+    private string BuildSystemPrompt()
+    {
+        var prompt = BaseSystemPrompt;
+        var instructions = ReadAgentInstructions();
+        return instructions.Length == 0
+            ? prompt
+            : prompt + "\n\n# Project instructions (agents.md)\n" + instructions;
+    }
+
+    /// <summary>
+    /// The agent instructions file (Settings > Agent), when it is switched on. It is
+    /// part of the system prompt, so it stays in the cached prefix as long as the
+    /// file does not change. A long file is cut, so it cannot swamp the context.
+    /// </summary>
+    private string ReadAgentInstructions()
+    {
+        if (!_cfg.Chat.SendInstructions) return "";
+        try
+        {
+            var file = _cfg.Chat.InstructionsFile;
+            var path = Path.IsPathRooted(file) ? file : Path.Combine(_cfg.Workspace.Root, file);
+            if (!File.Exists(path)) return "";
+            var text = File.ReadAllText(path).Trim();
+            var cap = Math.Max(0, _cfg.Chat.InstructionsChars);
+            return text.Length > cap ? text[..cap] + "\n... (cut at the configured length)" : text;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"the agent instructions could not be read: {ex.Message}");
+            return "";
+        }
+    }
+
+    private const string BaseSystemPrompt =
         "You are notecode, a local coding assistant in a code editor. Be concise and concrete. " +
         "Workspace tools: notecode_save_as(path, content) writes a new file and opens it in the editor - " +
         "use it whenever the user asks for a new file, page or document, with the right extension " +
@@ -3690,7 +3809,7 @@ capabilities = [ ""tool_use"" ]
     private async Task<string?> RunToolLoopAsync(
         List<ChatMessage> messages, List<ToolSpec> tools, IChatBackend backend, CancellationToken ct)
     {
-        const int MaxTurns = 8;
+        var MaxTurns = Math.Max(1, _cfg.Chat.MaxToolTurns);
         var offered = new HashSet<string>(tools.Select(t => t.Name), StringComparer.Ordinal);
 
         for (int turn = 0; turn < MaxTurns; turn++)
@@ -3719,6 +3838,7 @@ capabilities = [ ""tool_use"" ]
             // growing the context every later token has to attend over.
             var result = backend is LlamaServer llama
                 ? await llama.StreamChatTurnAsync(messages, tools, onDelta, onReasoning,
+                    temperature: _cfg.Llama.Agent.Temperature,
                     maxTokens: _cfg.Llama.Agent.MaxTokens, ct: ct)
                 : await backend.StreamTurnAsync(messages, tools, onDelta, ct, onReasoning);
 
@@ -3834,7 +3954,7 @@ capabilities = [ ""tool_use"" ]
             // provider gets to drive Blender.
             if (_byokToolSpecs is null)
             {
-                var wanted = _cfg.Mcp.Servers.Where(kv => !kv.Value.OnDemand).Select(kv => kv.Key).ToArray();
+                var wanted = _cfg.Mcp.Servers.Where(kv => kv.Value.Enabled && !kv.Value.OnDemand).Select(kv => kv.Key).ToArray();
                 _byokToolSpecs = ToToolSpecs(await _mcp.ListToolsAsync(wanted, ct));
             }
             baseSpecs = _byokToolSpecs;

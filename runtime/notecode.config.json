@@ -42,6 +42,7 @@
       "webuiMcpProxy": true,
       "reasoning": "off",
       "maxTokens": 2048,
+      "temperature": 0.7,
       "$comment_maxTokens": "Cap on one assistant turn of the local model. 2048 and not lower: save_as carries a whole file in its arguments, and a call cut off mid-argument is lost.",
       "jinja": true
     },
@@ -169,6 +170,20 @@
   "ui": {
     "$comment": "How big the text is. Microsoft sets 10 point as the floor for WinForms text whose size the user cannot change; here it can be changed, and 1.00 is that floor. /fontsize writes this.",
     "fontScale": 1.0
+  },
+
+  "chat": {
+    "$comment": "How a chat turn is put together. All of it is prompt, which the CPU re-reads for every token it writes. Settings > Chat & tools edits this.",
+    "editorContext": true,
+    "editorContextChars": 6000,
+    "toolResultChars": 4000,
+    "historyMessages": 8,
+    "historyChars": 6000,
+    "historyMessageChars": 1500,
+    "maxToolTurns": 8,
+    "instructionsFile": "agents.md",
+    "sendInstructions": true,
+    "instructionsChars": 8000
   },
 
   "editor": {

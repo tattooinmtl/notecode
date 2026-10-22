@@ -16,6 +16,7 @@ internal sealed class AppConfig
     public McpSection Mcp { get; set; } = new();
     public KimiSection Kimi { get; set; } = new();
     public EditorSection Editor { get; set; } = new();
+    public ChatSection Chat { get; set; } = new();
     public UiSection Ui { get; set; } = new();
     public WorkspaceSection Workspace { get; set; } = new();
     public SearchSection Search { get; set; } = new();
@@ -242,6 +243,9 @@ internal sealed class AgentSection
     /// <summary>Cap on one assistant turn of the local model. 0 means no cap.</summary>
     public int MaxTokens { get; set; } = 2048;
 
+    /// <summary>Sampling temperature for chat turns, on the local model and on providers.</summary>
+    public double Temperature { get; set; } = 0.7;
+
     public string McpServersConfig { get; set; } = "mcp-servers.json";
     public bool WebuiMcpProxy { get; set; } = true;
     public string Reasoning { get; set; } = "off";
@@ -288,6 +292,9 @@ internal sealed class McpServerDef
     /// </summary>
     public bool OnDemand { get; set; }
 
+    /// <summary>A server that is switched off is not started and its tools are not offered.</summary>
+    public bool Enabled { get; set; } = true;
+
     /// <summary>
     /// The cloud provider and model to suggest when this server's tools cannot run
     /// on the local model. REA's catalogue is 111,434 tokens, so /rea refuses the
@@ -317,6 +324,49 @@ internal sealed class LocalProvider
     public string Model { get; set; } = "";
     public int MaxContextSize { get; set; } = 32768;
     public List<string> Capabilities { get; set; } = new();
+}
+
+/// <summary>
+/// How a chat turn is put together: what context rides along and how much of it.
+///
+/// Everything here is prompt, and on a CPU every token of prompt is read again for
+/// every token the model writes. The defaults keep an ordinary local turn near 2k
+/// tokens; the settings page says what each one costs.
+/// </summary>
+internal sealed class ChatSection
+{
+    /// <summary>Send the open editor buffer with each turn.</summary>
+    public bool EditorContext { get; set; } = true;
+
+    /// <summary>How much of the editor buffer is sent.</summary>
+    public int EditorContextChars { get; set; } = 6_000;
+
+    /// <summary>How much of one tool result the model is given back.</summary>
+    public int ToolResultChars { get; set; } = 4_000;
+
+    /// <summary>How many messages of history (user and assistant) are sent back.</summary>
+    public int HistoryMessages { get; set; } = 8;
+
+    /// <summary>The most characters of history sent back, all messages together.</summary>
+    public int HistoryChars { get; set; } = 6_000;
+
+    /// <summary>How much of any one message is kept in the history.</summary>
+    public int HistoryMessageChars { get; set; } = 1_500;
+
+    /// <summary>The most model/tool round trips in one turn.</summary>
+    public int MaxToolTurns { get; set; } = 8;
+
+    /// <summary>
+    /// The agent instructions file, relative to the workspace root. Its text is
+    /// added to the system prompt when <see cref="SendInstructions"/> is on.
+    /// </summary>
+    public string InstructionsFile { get; set; } = "agents.md";
+
+    /// <summary>Add the instructions file to the system prompt of every turn.</summary>
+    public bool SendInstructions { get; set; } = true;
+
+    /// <summary>The instructions are cut at this many characters, so a long file cannot swamp the context.</summary>
+    public int InstructionsChars { get; set; } = 8_000;
 }
 
 internal sealed class EditorSection

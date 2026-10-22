@@ -410,7 +410,10 @@ internal sealed class AddProviderForm : Form
             BaseUrl = baseUrl.TrimEnd('/'),
             Style = _style.SelectedIndex == 1 ? ApiStyle.Anthropic : ApiStyle.OpenAi,
             EchoReasoning = _echoReasoning.Checked,
-            Model = _model.Text.Trim(),
+            // A provider is always saved with a model. An empty one is sent as
+            // "model": "" and the endpoint refuses the turn (MiniMax: "unknown
+            // model ''"), so the first model of the list stands in.
+            Model = _model.Text.Trim() is { Length: > 0 } chosen ? chosen : models.FirstOrDefault() ?? "",
             Models = models,
             ChatTemplate = _template.Text,
             ProtectedToken = protectedToken,

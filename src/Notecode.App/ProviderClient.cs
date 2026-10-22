@@ -49,9 +49,19 @@ internal sealed class ProviderClient : IChatBackend
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
     }
 
+    /// <summary>Sampling temperature for the turn (llama.agent.temperature).</summary>
+    public double Temperature { get; init; } = 0.7;
+
     public string DisplayName =>
-        $"{_provider.Label} ({_provider.Model})" +
-        (string.IsNullOrEmpty(_provider.Model) ? "" : "");
+        $"{_provider.Label} ({Model})";
+
+    /// <summary>
+    /// The model a turn is sent to. A provider saved before the form required a
+    /// model can have an empty one, and the endpoint refuses "model": "", so the
+    /// first model of its list stands in.
+    /// </summary>
+    private string Model =>
+        _provider.Model.Length > 0 ? _provider.Model : _provider.Models.FirstOrDefault() ?? "";
 
     public async Task<ChatTurn> StreamTurnAsync(
         IReadOnlyList<ChatMessage> messages,
@@ -89,10 +99,10 @@ internal sealed class ProviderClient : IChatBackend
     {
         var payload = new Dictionary<string, object?>
         {
-            ["model"] = _provider.Model,
+            ["model"] = Model,
             ["messages"] = messages.Select(ToOpenAiMessage).ToArray(),
             ["stream"] = true,
-            ["temperature"] = 0.7
+            ["temperature"] = Temperature
         };
         if (tools is { Count: > 0 })
         {
@@ -273,7 +283,7 @@ internal sealed class ProviderClient : IChatBackend
 
         var payload = new Dictionary<string, object?>
         {
-            ["model"] = _provider.Model,
+            ["model"] = Model,
             ["messages"] = conversation,
             ["stream"] = true,
             ["max_tokens"] = 4096

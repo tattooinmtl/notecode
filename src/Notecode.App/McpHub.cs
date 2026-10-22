@@ -46,8 +46,9 @@ internal sealed class McpHub : IAsyncDisposable
         foreach (var (name, def) in cfg.Mcp.Servers)
         {
             // An on-demand server (REA) is started by the command that wants it,
-            // not here: it is an npx cold start that publishes 170 tools.
-            if (def.OnDemand) continue;
+            // not here: it is an npx cold start that publishes 170 tools. A server
+            // that is switched off (Settings > MCP servers) is not started at all.
+            if (def.OnDemand || !def.Enabled) continue;
 
             try
             {
@@ -90,7 +91,7 @@ internal sealed class McpHub : IAsyncDisposable
         var cameUp = new List<string>();
         foreach (var name in failed)
         {
-            if (!cfg.Mcp.Servers.TryGetValue(name, out var def)) continue;
+            if (!cfg.Mcp.Servers.TryGetValue(name, out var def) || !def.Enabled) continue;
 
             try
             {

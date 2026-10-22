@@ -3,7 +3,7 @@
 # The splash screen runs the scan before the app opens, and the settings page is
 # where the scan can be repeated and the build chosen by hand. Both are checked
 # here the way a person would see them: the splash is captured while it is still
-# on screen, and the settings page is opened through the prompt with /settings.
+# on screen, and the settings page is opened through the prompt with /settings hardware.
 #
 #   ui-hardware.ps1 [-OutDir <folder>]
 
@@ -129,7 +129,7 @@ Check 'the status bar names the backend that is running' ($serverTag -match 'CPU
 
 # ------------------------------------------------------------ the settings
 Get-PromptBox $rootEl
-Set-Prompt $script:PromptBox '/settings'
+Set-Prompt $script:PromptBox '/settings hardware'
 Send-KeyToControl -Hwnd (Get-ControlHandle $script:PromptBox) -VirtualKey $script:VK_RETURN
 
 $settings = $null

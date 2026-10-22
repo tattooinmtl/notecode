@@ -52,7 +52,7 @@ for ($i = 0; $i -lt 40 -and -not $rootEl; $i++) {
 if (-not $rootEl) { throw 'the app never showed a prompt box' }
 
 Get-PromptBox $rootEl
-Set-Prompt $script:PromptBox '/settings'
+Set-Prompt $script:PromptBox '/settings hardware'
 Send-KeyToControl -Hwnd (Get-ControlHandle $script:PromptBox) -VirtualKey $script:VK_RETURN
 
 $settings = $null
