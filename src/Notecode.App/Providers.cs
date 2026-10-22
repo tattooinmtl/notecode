@@ -52,6 +52,31 @@ internal sealed class ProviderDef
     /// </summary>
     public bool EchoReasoning { get; set; }
 
+    /// <summary>
+    /// How hard the model thinks before it answers, sent as <c>reasoning_effort</c>:
+    /// low, medium, high, xhigh or max. Empty sends nothing and the provider decides.
+    /// MiniMax-M3.1-Flash defaults to max, which makes even "hello" take a long think.
+    /// </summary>
+    public string ReasoningEffort { get; set; } = "";
+
+    /// <summary>
+    /// Requests allowed in <see cref="RateWindowMinutes"/>. Null means not set yet, and
+    /// the published figure is filled in (<see cref="KnownLimits"/>); 0 means no limit.
+    /// </summary>
+    public int? RateLimit { get; set; }
+
+    /// <summary>The window the limit counts in: 1 (a minute), 60, 300 (5 hours) or 1440 (a day).</summary>
+    public int RateWindowMinutes { get; set; } = 60;
+
+    /// <summary>Where the limit comes from, shown in Settings > Providers.</summary>
+    public string RateLimitNote { get; set; } = "";
+
+    /// <summary>
+    /// The most tool rounds in one turn on this provider. 0 uses the chat setting
+    /// (chat.maxToolTurns for the local model, chat.cloudMaxToolTurns otherwise).
+    /// </summary>
+    public int MaxToolTurns { get; set; }
+
     public DateTimeOffset? LastChecked { get; set; }
     public string DoctorNote { get; set; } = "";
 
@@ -116,6 +141,10 @@ internal sealed class ProviderStore
 
         store ??= new ProviderStore();
         store.MergePresets();
+
+        // A provider without a limit of its own starts with the published one,
+        // whether it is a preset or one added by hand for the same endpoint.
+        foreach (var p in store.Providers) KnownLimits.Apply(p);
         return store;
     }
 

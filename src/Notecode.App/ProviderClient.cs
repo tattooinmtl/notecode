@@ -49,9 +49,19 @@ internal sealed class ProviderClient : IChatBackend
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
     }
 
+    /// <summary>Sampling temperature for the turn (llama.agent.temperature).</summary>
+    public double Temperature { get; init; } = 0.7;
+
     public string DisplayName =>
-        $"{_provider.Label} ({_provider.Model})" +
-        (string.IsNullOrEmpty(_provider.Model) ? "" : "");
+        $"{_provider.Label} ({Model})";
+
+    /// <summary>
+    /// The model a turn is sent to. A provider saved before the form required a
+    /// model can have an empty one, and the endpoint refuses "model": "", so the
+    /// first model of its list stands in.
+    /// </summary>
+    private string Model =>
+        _provider.Model.Length > 0 ? _provider.Model : _provider.Models.FirstOrDefault() ?? "";
 
     public async Task<ChatTurn> StreamTurnAsync(
         IReadOnlyList<ChatMessage> messages,
@@ -89,11 +99,21 @@ internal sealed class ProviderClient : IChatBackend
     {
         var payload = new Dictionary<string, object?>
         {
-            ["model"] = _provider.Model,
+            ["model"] = Model,
             ["messages"] = messages.Select(ToOpenAiMessage).ToArray(),
             ["stream"] = true,
-            ["temperature"] = 0.7
+            ["temperature"] = Temperature
         };
+
+        // How hard the model thinks. Only sent when it is set: a provider that does
+        // not know the field may refuse it.
+        if (!string.IsNullOrWhiteSpace(_provider.ReasoningEffort))
+            payload["reasoning_effort"] = _provider.ReasoningEffort;
+
+        // MiniMax keeps its thinking inside the answer, wrapped in <think>, unless
+        // it is asked to split it out. Split, it arrives as it is written.
+        if (_provider.BaseUrl.Contains("minimax", StringComparison.OrdinalIgnoreCase))
+            payload["reasoning_split"] = true;
         if (tools is { Count: > 0 })
         {
             payload["tools"] = tools.Select(t => t.Definition).ToArray();
@@ -103,7 +123,14 @@ internal sealed class ProviderClient : IChatBackend
         var text = new StringBuilder();
         var calls = new ToolCallAccumulator();
         var reasoning = new StringBuilder();
+        var thinking = new ThinkingStream();
         string finish = "";
+
+        void Emit(string answer, string thought)
+        {
+            if (thought.Length > 0) { reasoning.Append(thought); onReasoning?.Invoke(thought); }
+            if (answer.Length > 0) { text.Append(answer); onDelta?.Invoke(answer); }
+        }
 
         using var req = new HttpRequestMessage(HttpMethod.Post, _provider.ChatUrl)
         {
@@ -143,20 +170,28 @@ internal sealed class ProviderClient : IChatBackend
 
                     if (!choice.TryGetProperty("delta", out var d)) continue;
 
-                    if (d.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
-                    {
-                        var t = content.GetString();
-                        if (!string.IsNullOrEmpty(t)) { text.Append(t); onDelta?.Invoke(t); }
-                    }
-
-                    // The thinking behind the answer. Some providers send it under
-                    // "reasoning_content" and some under "reasoning".
+                    // The thinking behind the answer, wherever this provider puts it
+                    // (see ThinkingStream). A chunk that carries it as a string does
+                    // not also have its reasoning_details counted, or it would show twice.
+                    var sawString = false;
                     foreach (var name in new[] { "reasoning_content", "reasoning" })
                     {
                         if (d.TryGetProperty(name, out var r) && r.ValueKind == JsonValueKind.String)
                         {
                             var t = r.GetString();
-                            if (!string.IsNullOrEmpty(t)) { reasoning.Append(t); onReasoning?.Invoke(t); }
+                            if (!string.IsNullOrEmpty(t)) { Emit("", t); sawString = true; }
+                        }
+                    }
+                    if (!sawString && d.TryGetProperty("reasoning_details", out var details))
+                        Emit("", thinking.FeedDetails(details));
+
+                    if (d.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
+                    {
+                        var t = content.GetString();
+                        if (!string.IsNullOrEmpty(t))
+                        {
+                            var (answer, thought) = thinking.FeedContent(t);
+                            Emit(answer, thought);
                         }
                     }
 
@@ -167,7 +202,10 @@ internal sealed class ProviderClient : IChatBackend
             catch (JsonException) { /* keep-alive or partial frame */ }
         }
 
-        return new ChatTurn(text.ToString(), calls.Build(), finish, reasoning.ToString());
+        var (lastAnswer, lastThought) = thinking.Flush();
+        Emit(lastAnswer, lastThought);
+
+        return new ChatTurn(text.ToString().TrimStart(), calls.Build(), finish, reasoning.ToString());
     }
 
     private object ToOpenAiMessage(ChatMessage m)
@@ -273,7 +311,7 @@ internal sealed class ProviderClient : IChatBackend
 
         var payload = new Dictionary<string, object?>
         {
-            ["model"] = _provider.Model,
+            ["model"] = Model,
             ["messages"] = conversation,
             ["stream"] = true,
             ["max_tokens"] = 4096

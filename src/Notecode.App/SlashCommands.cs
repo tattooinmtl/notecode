@@ -155,10 +155,16 @@ internal static class SlashCommands
 
         new(
             "settings",
-            "Scan the hardware and choose which llama.cpp build runs",
-            "/settings",
+            "Open the settings: providers, agent, model, performance, tools",
+            "/settings [page]",
             """
-            **/settings** - the hardware page.
+            **/settings** - the settings window, the same one as the Settings menu.
+
+            `/settings` opens it on Providers; `/settings agent`, `/settings model`,
+            `/settings performance`, `/settings chat`, `/settings mcp` or
+            `/settings editor` open it on that page.
+
+            **/settings hardware** - the hardware page.
 
             It shows what this machine is - the processor, the core counts, the memory,
             the display adapter and how much video memory it really has - and which

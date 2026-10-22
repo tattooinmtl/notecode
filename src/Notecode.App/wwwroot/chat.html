@@ -239,6 +239,20 @@
     white-space: pre-wrap; overflow-wrap: anywhere;
   }
   .reasoning:empty { display: none; }
+  .reasoning.folded { display: none; }
+  .activity .secs { color: var(--dim, #7E8AA0); font-variant-numeric: tabular-nums; margin-left: 4px; }
+
+  /* Once the answer starts, the thinking folds into one line, the way Claude does
+     it. Clicking the line opens it again. */
+  .thought {
+    flex-basis: 100%; text-align: left; margin: 6px 0 0 0; padding: 0;
+    background: none; border: 0; cursor: pointer;
+    font: inherit; font-size: 12px; color: var(--muted);
+  }
+  .thought::before { content: '▸ '; color: var(--cyan); }
+  .thought.open::before { content: '▾ '; }
+  .thought:hover { color: var(--text, #E8ECF5); }
+  .thought:focus-visible { outline: 1px solid var(--cyan); outline-offset: 2px; border-radius: 3px; }
   .reasoning .caret { height: 12px; }
 
   /* Once the answer has arrived the row is history: the blinker and the icon stop
@@ -500,6 +514,23 @@
     return document.getElementById('thinking');
   }
 
+  /* A seconds counter next to what the agent is doing. A cloud model can think for
+     half a minute before it writes a word; a number that keeps moving says the app
+     is waiting, not frozen. */
+  var actTimer = null, actStart = 0, actLabel = '';
+
+  function stopTimer() {
+    if (actTimer) { clearInterval(actTimer); actTimer = null; }
+  }
+
+  function tick() {
+    var row = document.getElementById('thinking');
+    var what = row && row.querySelector('.activity .what');
+    if (!what) { stopTimer(); return; }
+    var secs = Math.floor((Date.now() - actStart) / 1000);
+    what.innerHTML = '<b>' + esc(actLabel) + '</b>' + (secs > 0 ? '<span class="secs">' + secs + 's</span>' : '');
+  }
+
   /* Show what the agent is doing. The row is made once and then updated, so the
      blinker does not jump around while the agent works. */
   function showActivity(kind, label) {
@@ -523,13 +554,41 @@
     // A new turn means new thinking, so the reasoning from the last one goes.
     if (kind === 'think') {
       var box = act.querySelector('.reasoning');
-      if (box) box.textContent = '';
+      if (box) { box.textContent = ''; box.classList.remove('folded'); }
+      var fold = act.querySelector('.thought');
+      if (fold) fold.remove();
     }
 
     act.classList.remove('done');
     act.querySelector('.ico').innerHTML = iconSvg(kind);
-    act.querySelector('.what').innerHTML = '<b>' + esc(label || 'Working') + '</b>';
+    actLabel = label || 'Working';
+    actStart = Date.now();
+    stopTimer();
+    tick();
+    actTimer = setInterval(tick, 1000);
     scrollDown();
+  }
+
+  /* The thinking folds into one line once the answer starts. */
+  function foldReasoning(row) {
+    var box = row.querySelector('.reasoning');
+    if (!box || box.classList.contains('folded') || !box.textContent.trim()) return;
+    var secs = Math.max(1, Math.round((Date.now() - actStart) / 1000));
+    var fold = row.querySelector('.thought');
+    if (!fold) {
+      fold = document.createElement('button');
+      fold.type = 'button';
+      fold.className = 'thought';
+      fold.addEventListener('click', function () {
+        box.classList.toggle('folded');
+        fold.classList.toggle('open', !box.classList.contains('folded'));
+      });
+      box.parentNode.insertBefore(fold, box);
+    }
+    fold.textContent = 'Thought for ' + secs + 's';
+    fold.setAttribute('aria-label', 'Thought for ' + secs + ' seconds. Show the thinking.');
+    fold.classList.remove('open');
+    box.classList.add('folded');
   }
 
   /* The thinking goes on the line under the blinker, and it streams in. */
@@ -546,8 +605,10 @@
   /* The blinker stops when the answer starts, but the row stays: the icon and the
      reasoning under it have to be there to be read. */
   function stopBlinker() {
+    stopTimer();
     var row = document.getElementById('thinking');
     if (!row) return;
+    foldReasoning(row);
     var dots = row.querySelector('.thinking');
     if (dots) dots.classList.add('done');
     var act = row.querySelector('.activity');
@@ -565,6 +626,7 @@
   /* A new question gets its own activity row, so the icon and the thinking stay
      next to the question they belong to. */
   function removeActivityRow() {
+    stopTimer();
     var t = document.getElementById('thinking');
     if (t) t.remove();
   }
