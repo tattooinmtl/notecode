@@ -478,6 +478,9 @@ internal sealed class MainForm : Form
         _status.Items.Add(_stServer);
         _status.Items.Add(new ToolStripSeparator());
         _status.Items.Add(_stModel);
+        // Like the model name in Claude's footer: click it to change the model.
+        _stModel.IsLink = false;
+        _stModel.Click += (s, e) => ShowSettings(SettingsForm.ModelPage);
         _status.Items.Add(new ToolStripSeparator());
         _status.Items.Add(_stMcp);
         _status.Items.Add(new ToolStripSeparator());
