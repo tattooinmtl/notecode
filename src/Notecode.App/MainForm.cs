@@ -177,6 +177,9 @@ internal sealed class MainForm : Form
     /// </summary>
     private int _conversationEpoch;
 
+    /// <summary>Requests sent to each provider in its rolling window (Settings > Providers).</summary>
+    private readonly UsageMeter _usage = new();
+
     // The prompt budget of a chat turn. Context is costly on a CPU twice over: once
     // to prefill it, and again on every token decoded, because the model attends
     // over all of it. The defaults keep an ordinary turn near 2k tokens; Settings >
@@ -1854,7 +1857,10 @@ internal sealed class MainForm : Form
 
         var model = provider.Model.Length > 0 ? provider.Model : provider.Models.FirstOrDefault() ?? "no model";
         var effort = string.IsNullOrWhiteSpace(provider.ReasoningEffort) ? "" : $" · {provider.ReasoningEffort}";
-        return $"{provider.Label} · {model}{effort}";
+        var usage = provider.RateLimit is > 0
+            ? $" · {_usage.Used(provider)}/{provider.RateLimit} per {KnownLimits.WindowName(provider.RateWindowMinutes)}"
+            : "";
+        return $"{provider.Label} · {model}{effort}{usage}";
     }
 
     private static string SettingsPageFor(string argument)
@@ -3583,7 +3589,7 @@ capabilities = [ ""tool_use"" ]
 
         try
         {
-            var answer = await RunToolLoopAsync(messages, tools, backend, ct);
+            var answer = await RunToolLoopAsync(messages, tools, backend, provider, ct);
             if (!string.IsNullOrEmpty(answer) && epoch == _conversationEpoch)
             {
                 _chatHistory.Add(new ChatMessage("user", Truncate(prompt, HistoryMessageChars)));
@@ -3811,9 +3817,14 @@ capabilities = [ ""tool_use"" ]
     /// </summary>
     /// <returns>the final answer, or null when the loop ran out of turns.</returns>
     private async Task<string?> RunToolLoopAsync(
-        List<ChatMessage> messages, List<ToolSpec> tools, IChatBackend backend, CancellationToken ct)
+        List<ChatMessage> messages, List<ToolSpec> tools, IChatBackend backend, ProviderDef provider, CancellationToken ct)
     {
-        var MaxTurns = Math.Max(1, _cfg.Chat.MaxToolTurns);
+        // How many tool rounds this provider gets: its own setting, or the chat
+        // setting for local or cloud models.
+        var MaxTurns = Math.Max(1, provider.MaxToolTurns > 0
+            ? provider.MaxToolTurns
+            : provider.IsLocal ? _cfg.Chat.MaxToolTurns : _cfg.Chat.CloudMaxToolTurns);
+        var used = new List<string>();
         var offered = new HashSet<string>(tools.Select(t => t.Name), StringComparer.Ordinal);
 
         for (int turn = 0; turn < MaxTurns; turn++)
@@ -3840,6 +3851,22 @@ capabilities = [ ""tool_use"" ]
                 if (InvokeRequired) BeginInvoke(() => _chat.Reasoning(reasoning));
                 else _chat.Reasoning(reasoning);
             };
+
+            // Each round is one request against the provider's limit. Stopping here
+            // says when it frees up, which a 429 from the provider would not.
+            if (!provider.IsLocal && _usage.AtLimit(provider))
+            {
+                var frees = _usage.FreesAt(provider);
+                AppendAi(
+                    $"[notecode] {provider.Label} is at its limit of {provider.RateLimit} requests a " +
+                    $"{KnownLimits.WindowName(provider.RateWindowMinutes)}" +
+                    (frees is { } at ? $"; the next one frees up at {at:HH:mm}." : ".") +
+                    " Change the limit in Settings > Providers if your plan allows more.", "warn");
+                return null;
+            }
+            _usage.Record(provider);
+            WarnNearLimit(provider);
+            UpdateStatusLabels();
 
             // The local model gets a cap on its answer, so a runaway turn cannot keep
             // growing the context every later token has to attend over.
@@ -3891,6 +3918,7 @@ capabilities = [ ""tool_use"" ]
             {
                 // Say what is about to happen, with an icon for the kind of work.
                 var (kind, label) = DescribeTool(call.Name, call.ArgumentsJson);
+                used.Add(label);
                 _chat.Activity(kind, label);
 
                 // Only a tool this turn offered is run. The model can name any tool
@@ -3917,8 +3945,27 @@ capabilities = [ ""tool_use"" ]
             }
         }
 
-        AppendAi("[notecode] stopped after the maximum number of tool turns.", "warn");
-        return null;
+        // The model ran out of rounds before it answered. What it did so far goes
+        // into the history, so "continue" picks up from there instead of starting over.
+        AppendAi(
+            $"[notecode] stopped after {MaxTurns} tool rounds, the limit for {provider.Label}. " +
+            "Say \"continue\" to let it carry on, or raise the limit in Settings > " +
+            (provider.MaxToolTurns > 0 ? "Providers." : "Chat & tools."), "warn");
+        return $"(I stopped after {MaxTurns} tool rounds before finishing. So far: " +
+               string.Join("; ", used.Distinct().TakeLast(12)) + ".)";
+    }
+
+    /// <summary>Says so once when a provider's usage passes 80% of its limit.</summary>
+    private void WarnNearLimit(ProviderDef provider)
+    {
+        if (provider.RateLimit is not int limit || limit <= 0) return;
+        var used = _usage.Used(provider);
+        if (used == (int)Math.Ceiling(limit * 0.8))
+        {
+            AppendAi(
+                $"[notecode] {provider.Label}: {used} of {limit} requests used this " +
+                $"{KnownLimits.WindowName(provider.RateWindowMinutes)}.", "warn");
+        }
     }
 
     /// <summary>

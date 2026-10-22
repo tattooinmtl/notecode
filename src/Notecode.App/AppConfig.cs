@@ -359,8 +359,15 @@ internal sealed class ChatSection
     /// </summary>
     public bool ShowThinking { get; set; } = true;
 
-    /// <summary>The most model/tool round trips in one turn.</summary>
+    /// <summary>The most model/tool round trips in one turn on the local model.</summary>
     public int MaxToolTurns { get; set; } = 8;
+
+    /// <summary>
+    /// The same for a cloud provider. A cloud model is fast, so a task that takes a
+    /// dozen tool calls is normal; each round is one request against its limit.
+    /// A provider can set its own (Settings > Providers).
+    /// </summary>
+    public int CloudMaxToolTurns { get; set; } = 25;
 
     /// <summary>
     /// The agent instructions file, relative to the workspace root. Its text is

@@ -210,6 +210,7 @@
     "historyChars": 6000,
     "historyMessageChars": 1500,
     "maxToolTurns": 8,
+    "cloudMaxToolTurns": 25,
     "instructionsFile": "agents.md",
     "sendInstructions": true,
     "instructionsChars": 8000

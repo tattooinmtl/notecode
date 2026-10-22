@@ -91,6 +91,17 @@ internal sealed class SettingsForm : Form
     private readonly NumericUpDown _historyMessages = new();
     private readonly NumericUpDown _historyChars = new();
     private readonly NumericUpDown _maxToolTurns = new();
+    private readonly NumericUpDown _cloudToolTurns = new();
+
+    // ---- provider limits
+    private readonly NumericUpDown _providerRounds = new();
+    private readonly NumericUpDown _providerLimit = new();
+    private readonly ComboBox _providerWindow = new();
+    private readonly Label _providerLimitNote = new();
+    private bool _showingProvider;
+
+    private static readonly (string Name, int Minutes)[] Windows =
+        { ("a minute", 1), ("an hour", 60), ("5 hours", 300), ("a day", 1440) };
     private bool _toolsLoaded;
 
     // ---- mcp
@@ -244,6 +255,40 @@ internal sealed class SettingsForm : Form
             if (p is not null && !p.IsLocal && _providerModel.Text.Trim().Length > 0) p.Model = _providerModel.Text.Trim();
         };
         page.Row("Model", _providerModel, "Pick one, or type a model id the provider offers.");
+
+        StyleNumber(_providerLimit, 0, 100_000, 10);
+        _providerLimit.AccessibleName = "Request limit";
+        StyleCombo(_providerWindow, editable: false);
+        _providerWindow.Width = 120;
+        foreach (var (name, _) in Windows) _providerWindow.Items.Add("per " + name);
+        var limitRow = new FlowLayoutPanel { AutoSize = true, BackColor = Theme.Canvas, Margin = Padding.Empty, WrapContents = false };
+        _providerLimit.Margin = new Padding(0, 0, 8, 0);
+        limitRow.Controls.AddRange(new Control[] { _providerLimit, _providerWindow });
+        page.Row("Request limit", limitRow,
+            "Requests your plan allows; every tool round is one. The turn stops before going over and says when " +
+            "the next request frees up. 0 is no limit.");
+        _providerLimitNote.Font = Theme.UiSmall;
+        _providerLimitNote.ForeColor = Theme.TextDim;
+        _providerLimitNote.AutoSize = true;
+        _providerLimitNote.MaximumSize = new Size(700, 0);
+        page.Row("Published figure", _providerLimitNote, null);
+
+        StyleNumber(_providerRounds, 0, 200, 1);
+        _providerRounds.AccessibleName = "Tool rounds per turn for this provider";
+        page.Row("Tool rounds per turn", _providerRounds,
+            "How many tool calls a turn on this provider may make. 0 uses the setting on Chat & tools.");
+
+        void SaveLimits()
+        {
+            var p = SelectedProvider();
+            if (p is null || p.IsLocal || _showingProvider) return;
+            p.RateLimit = (int)_providerLimit.Value;
+            p.RateWindowMinutes = Windows[Math.Max(0, _providerWindow.SelectedIndex)].Minutes;
+            p.MaxToolTurns = (int)_providerRounds.Value;
+        }
+        _providerLimit.ValueChanged += (s, e) => SaveLimits();
+        _providerWindow.SelectedIndexChanged += (s, e) => SaveLimits();
+        _providerRounds.ValueChanged += (s, e) => SaveLimits();
 
         var buttons = new FlowLayoutPanel { AutoSize = true, BackColor = Theme.Canvas, WrapContents = true, Margin = new Padding(0, 6, 0, 0) };
         var makeActive = Button("Make active", width: 120);
@@ -500,7 +545,11 @@ internal sealed class SettingsForm : Form
         page.Row("History, characters", _historyChars, "The oldest exchanges go first when this is full.");
         StyleNumber(_maxToolTurns, 1, 50, 1);
         _maxToolTurns.Value = Math.Clamp(_cfg.Chat.MaxToolTurns, 1, 50);
-        page.Row("Tool rounds per turn", _maxToolTurns, "How many times the model may call tools before it has to answer.");
+        page.Row("Tool rounds per turn", _maxToolTurns, "On the local model: how many times it may call tools before it has to answer.");
+        StyleNumber(_cloudToolTurns, 1, 200, 1);
+        _cloudToolTurns.Value = Math.Clamp(_cfg.Chat.CloudMaxToolTurns, 1, 200);
+        page.Row("Tool rounds, cloud", _cloudToolTurns,
+            "The same on a cloud provider. Each round is one request against its limit (Providers page).");
 
         _pages[ChatPage] = page.Root;
         _onShow[ChatPage] = async () => await LoadToolsAsync();
@@ -598,6 +647,18 @@ internal sealed class SettingsForm : Form
             : $"{p.BaseUrl}  ·  {p.Style}  ·  {(p.HasToken ? "API key set" : "no API key yet - use Edit / API key")}" +
               (string.IsNullOrEmpty(p.DoctorNote) ? "" : $"\n{p.DoctorNote}");
         FillModels(_providerModel, p);
+
+        // Shown without being written back: the handlers only save what the user changes.
+        _showingProvider = true;
+        _providerLimit.Value = Math.Clamp(p.RateLimit ?? 0, 0, 100_000);
+        var window = Array.FindIndex(Windows, w => w.Minutes == p.RateWindowMinutes);
+        _providerWindow.SelectedIndex = window >= 0 ? window : 1;
+        _providerRounds.Value = Math.Clamp(p.MaxToolTurns, 0, 200);
+        _providerLimitNote.Text = p.IsLocal
+            ? "The local server has no request limit."
+            : string.IsNullOrEmpty(p.RateLimitNote) ? "No published figure for this endpoint: set your plan's." : p.RateLimitNote;
+        foreach (var c in new Control[] { _providerLimit, _providerWindow, _providerRounds }) c.Enabled = !p.IsLocal;
+        _showingProvider = false;
     }
 
     private static void FillModels(ComboBox box, ProviderDef p)
@@ -745,6 +806,7 @@ internal sealed class SettingsForm : Form
             _cfg.Chat.HistoryMessages = (int)_historyMessages.Value;
             _cfg.Chat.HistoryChars = (int)_historyChars.Value;
             _cfg.Chat.MaxToolTurns = (int)_maxToolTurns.Value;
+            _cfg.Chat.CloudMaxToolTurns = (int)_cloudToolTurns.Value;
             _cfg.Chat.SendInstructions = _agentSend.Checked;
             _cfg.Chat.ShowThinking = _showThinking.Checked;
             w.Set("llama.agent.chatTools", _cfg.Llama.Agent.ChatTools)
@@ -754,6 +816,7 @@ internal sealed class SettingsForm : Form
              .Set("chat.historyMessages", _cfg.Chat.HistoryMessages)
              .Set("chat.historyChars", _cfg.Chat.HistoryChars)
              .Set("chat.maxToolTurns", _cfg.Chat.MaxToolTurns)
+             .Set("chat.cloudMaxToolTurns", _cfg.Chat.CloudMaxToolTurns)
              .Set("chat.sendInstructions", _cfg.Chat.SendInstructions)
              .Set("chat.showThinking", _cfg.Chat.ShowThinking);
 
