@@ -52,6 +52,13 @@ internal sealed class ProviderDef
     /// </summary>
     public bool EchoReasoning { get; set; }
 
+    /// <summary>
+    /// How hard the model thinks before it answers, sent as <c>reasoning_effort</c>:
+    /// low, medium, high, xhigh or max. Empty sends nothing and the provider decides.
+    /// MiniMax-M3.1-Flash defaults to max, which makes even "hello" take a long think.
+    /// </summary>
+    public string ReasoningEffort { get; set; } = "";
+
     public DateTimeOffset? LastChecked { get; set; }
     public string DoctorNote { get; set; } = "";
 

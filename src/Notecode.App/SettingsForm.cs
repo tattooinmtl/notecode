@@ -68,6 +68,10 @@ internal sealed class SettingsForm : Form
     private readonly ModernCheckBox _vision = new();
     private readonly ComboBox _quickProvider = new();
     private readonly ComboBox _quickModel = new();
+    private readonly ComboBox _effort = new();
+    private readonly ModernCheckBox _showThinking = new();
+
+    private static readonly string[] Efforts = { "provider default", "low", "medium", "high", "xhigh", "max" };
 
     // ---- performance
     private readonly NumericUpDown _ctx = new();
@@ -329,6 +333,7 @@ internal sealed class SettingsForm : Form
             }
             _activeProvider = p.Name;
             FillModels(_quickModel, p);
+            FillEffort(p);
         };
         page.Row("Provider", _quickProvider, "The provider that answers every turn.");
 
@@ -340,6 +345,27 @@ internal sealed class SettingsForm : Form
             if (p is not null && !p.IsLocal && _quickModel.Text.Trim().Length > 0) p.Model = _quickModel.Text.Trim();
         };
         page.Row("Model", _quickModel, "The local model file itself is chosen on Settings > Hardware.");
+
+        StyleCombo(_effort, editable: false);
+        _effort.Items.AddRange(Efforts);
+        _effort.AccessibleName = "Reasoning effort";
+        _effort.SelectedIndexChanged += (s, e) =>
+        {
+            var p = _providers.Find(_activeProvider);
+            if (p is null || p.IsLocal || _effort.SelectedIndex < 0) return;
+            p.ReasoningEffort = _effort.SelectedIndex == 0 ? "" : Efforts[_effort.SelectedIndex];
+        };
+        page.Row("Reasoning effort", _effort,
+            "How long a cloud model thinks before it answers. MiniMax-M3.1-Flash defaults to max, so even " +
+            "\"hello\" takes a long think: low or medium answers far sooner. Shown in the status bar.");
+
+        page.Section("Thinking");
+        _showThinking.Text = "Show the model's thinking while it works";
+        _showThinking.Checked = _cfg.Chat.ShowThinking;
+        _showThinking.AutoSize = true;
+        page.Row("Display", _showThinking,
+            "On: the thinking streams in as it is written, then folds into one line (\"Thought for 12s\") " +
+            "when the answer starts - click it to read it again. Off: only the blinker and its timer.");
 
         page.Section("Reasoning (local model)");
         var reasoning = new FlowLayoutPanel { AutoSize = true, BackColor = Theme.Canvas, Margin = Padding.Empty };
@@ -379,7 +405,7 @@ internal sealed class SettingsForm : Form
             var index = _providers.Providers.FindIndex(p => p.Name == _activeProvider);
             _quickProvider.SelectedIndex = Math.Max(0, index);
             var active = _providers.Find(_activeProvider);
-            if (active is not null) FillModels(_quickModel, active);
+            if (active is not null) { FillModels(_quickModel, active); FillEffort(active); }
         };
     }
 
@@ -585,6 +611,13 @@ internal sealed class SettingsForm : Form
         box.Enabled = !p.IsLocal;
     }
 
+    private void FillEffort(ProviderDef p)
+    {
+        var index = Array.IndexOf(Efforts, p.ReasoningEffort);
+        _effort.SelectedIndex = index > 0 ? index : 0;
+        _effort.Enabled = !p.IsLocal;
+    }
+
     private void EditProvider(ProviderDef? existing)
     {
         using var form = new AddProviderForm(_cfg, _providers, existing, existing?.Name);
@@ -713,6 +746,7 @@ internal sealed class SettingsForm : Form
             _cfg.Chat.HistoryChars = (int)_historyChars.Value;
             _cfg.Chat.MaxToolTurns = (int)_maxToolTurns.Value;
             _cfg.Chat.SendInstructions = _agentSend.Checked;
+            _cfg.Chat.ShowThinking = _showThinking.Checked;
             w.Set("llama.agent.chatTools", _cfg.Llama.Agent.ChatTools)
              .Set("chat.editorContext", _cfg.Chat.EditorContext)
              .Set("chat.editorContextChars", _cfg.Chat.EditorContextChars)
@@ -720,7 +754,8 @@ internal sealed class SettingsForm : Form
              .Set("chat.historyMessages", _cfg.Chat.HistoryMessages)
              .Set("chat.historyChars", _cfg.Chat.HistoryChars)
              .Set("chat.maxToolTurns", _cfg.Chat.MaxToolTurns)
-             .Set("chat.sendInstructions", _cfg.Chat.SendInstructions);
+             .Set("chat.sendInstructions", _cfg.Chat.SendInstructions)
+             .Set("chat.showThinking", _cfg.Chat.ShowThinking);
 
             // MCP servers
             foreach (var (name, enabled, onDemand, timeout) in _mcpRows)

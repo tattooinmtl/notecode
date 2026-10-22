@@ -353,6 +353,12 @@ internal sealed class ChatSection
     /// <summary>How much of any one message is kept in the history.</summary>
     public int HistoryMessageChars { get; set; } = 1_500;
 
+    /// <summary>
+    /// Show the model's thinking while it works. It streams in under the activity
+    /// row and folds into one line once the answer starts. Off shows only the blinker.
+    /// </summary>
+    public bool ShowThinking { get; set; } = true;
+
     /// <summary>The most model/tool round trips in one turn.</summary>
     public int MaxToolTurns { get; set; } = 8;
 

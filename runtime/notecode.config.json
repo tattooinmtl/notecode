@@ -1,6 +1,5 @@
 {
   "$comment": "Single source of truth for notecode.exe. Edited by hand; every component reads this file.",
-
   "llama": {
     "$comment": "llama.cpp server. Build selection rationale in docs/DESIGN.md.",
     "serverExe": "C:\\Llama\\llama.cpp\\build-notecode\\bin\\Release\\llama-server.exe",
@@ -14,7 +13,6 @@
     "port": 8080,
     "alias": "notecode-minicpm",
     "$comment_builds": "One llama.cpp build per backend. A llama-server.exe is compiled for exactly one backend, so the GPU version and the CPU version are two different files. The hardware scan picks the key; the key picks the executable. A build whose exe is missing is not an error - it is simply not offered. runtime/build-llama-gpu.ps1 compiles the extra ones.",
-
     "cpu": {
       "device": "none",
       "nGpuLayers": 0,
@@ -23,7 +21,6 @@
       "$comment_threads": "Decode uses one thread per physical core: on 8 Zen 2 cores the SMT siblings share an FPU and an L2 and slow each other down. Prefill (threadsBatch) is batched matrix work and does use all 16.",
       "threadsHttp": 8
     },
-
     "context": {
       "ctxSize": 12288,
       "$comment_ctx": "A chat turn is kept near 2k tokens (chat tool set, capped editor buffer and history), so 12288 leaves room for a long tool loop. Every token of context is KV the CPU re-reads for each new token.",
@@ -32,11 +29,29 @@
       "parallel": 1,
       "$comment": "KV bytes/token = 2 * 40 layers * 2 kv_heads * 256 head_dim * bytes_per_elem. f16=80KiB/tok, q8_0=42.5KiB/tok. At ctx 32768 with q8_0 the KV cache is 1.33 GiB."
     },
-
     "agent": {
-      "tools": ["read_file", "file_glob_search", "grep_search", "write_file", "edit_file", "get_info", "exec_shell_command"],
-      "$comment": "b10988 built-in tool set is: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info. 'apply_diff' does not exist in this build.",
-      "chatTools": ["notecode_save_as", "notecode_read_file", "edit_file", "grep_search", "file_glob_search", "notecode_list_files", "notecode_run_command", "notecode_move_path", "notecode_delete_path", "notecode_get_editor_buffer"],
+      "tools": [
+        "read_file",
+        "file_glob_search",
+        "grep_search",
+        "write_file",
+        "edit_file",
+        "get_info",
+        "exec_shell_command"
+      ],
+      "$comment": "b10988 built-in tool set is: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info. \u0027apply_diff\u0027 does not exist in this build.",
+      "chatTools": [
+        "notecode_save_as",
+        "notecode_read_file",
+        "edit_file",
+        "grep_search",
+        "file_glob_search",
+        "notecode_list_files",
+        "notecode_run_command",
+        "notecode_move_path",
+        "notecode_delete_path",
+        "notecode_get_editor_buffer"
+      ],
       "$comment_chatTools": "The tools an ordinary chat turn with the local model is given, one per job. Every schema is prompt the CPU has to read and attend over on every token, so the 26-tool catalogue was cut to these. A slash command that needs more asks for it by name (the skill fixer, /rea).",
       "mcpServersConfig": "mcp-servers.json",
       "webuiMcpProxy": true,
@@ -46,7 +61,6 @@
       "$comment_maxTokens": "Cap on one assistant turn of the local model. 2048 and not lower: save_as carries a whole file in its arguments, and a call cut off mid-argument is lost.",
       "jinja": true
     },
-
     "builds": {
       "cpu": {
         "label": "CPU only",
@@ -73,7 +87,6 @@
         "nGpuLayers": 99
       }
     },
-
     "server": {
       "jinja": true,
       "slots": true,
@@ -83,65 +96,81 @@
       "cacheReuse": 256,
       "$comment_cacheReuse": "--cache-reuse: reuse KV chunks of at least this many tokens when only part of the prompt changed, instead of prefilling from the first difference.",
       "mlock": false,
-      "$comment_mlock": "Passed as --load-mode mmap+mlock. Pins the model in RAM so experts are never paged out. Turn it on only when about 23 GiB is free with everything else running, or the rest of the system pages instead.",
+      "$comment_mlock": "Passed as --load-mode mmap\u002Bmlock. Pins the model in RAM so experts are never paged out. Turn it on only when about 23 GiB is free with everything else running, or the rest of the system pages instead.",
       "logLevel": "info"
     }
   },
-
   "memory": {
-    "$comment": "The 24 GiB allocation is the llama.cpp + gguf envelope only. It does NOT include the OS or other apps.",
+    "$comment": "The 24 GiB allocation is the llama.cpp \u002B gguf envelope only. It does NOT include the OS or other apps.",
     "budgetGiB": 24,
     "modelGiB": 19.71,
     "reserveGiB": 1.0,
     "warnFreeSystemGiB": 6.0,
     "$comment2": "Physical RAM is 28.9 GiB. Model is 19.71 GiB mmap. Other processes currently hold ~13 GiB, so the system must be at ~6 GiB free before the server can hold its working set without paging."
   },
-
   "mcp": {
     "$comment": "Servers exposed to the model by llama-server --mcp-servers-config, and to the notecode UI by the built-in MCP client.",
     "servers": {
       "notecode": {
         "transport": "stdio",
         "command": "node",
-        "args": ["C:\\NexusOne\\prototypes\\notecode\\runtime\\notecode-mcp.mjs"],
+        "args": [
+          "C:\\NexusOne\\prototypes\\notecode\\runtime\\notecode-mcp.mjs"
+        ],
         "toolTimeoutMs": 60000,
-        "description": "The AI's file hook. The app talks to it directly, so a BYOK provider can still write files."
+        "description": "The AI\u0027s file hook. The app talks to it directly, so a BYOK provider can still write files.",
+        "enabled": true,
+        "onDemand": false
       },
       "rea": {
         "transport": "stdio",
         "command": "cmd.exe",
-        "args": ["/d", "/c", "npx", "-y", "rea-agents@6.4.0", "mcp"],
+        "args": [
+          "/d",
+          "/c",
+          "npx",
+          "-y",
+          "rea-agents@6.4.0",
+          "mcp"
+        ],
         "toolTimeoutMs": 600000,
         "onDemand": true,
         "provider": "minimax",
         "model": "MiniMax-M3.1-Flash",
-        "$comment_provider": "REA is cloud only for now: its 170 schemas are 111,434 tokens, far over a local model's context. /rea runs on the active provider, and refuses when that is the local model, suggesting this provider and model (/provider minimax).",
-        "description": "REA reverse-engineering agent (170 tools). Same wiring kimi-code already uses. On demand: started by /rea only, stopped when that turn ends, and not in mcp-servers.json, so llama-server never spawns it."
+        "$comment_provider": "REA is cloud only for now: its 170 schemas are 111,434 tokens, far over a local model\u0027s context. /rea runs on the active provider, and refuses when that is the local model, suggesting this provider and model (/provider minimax).",
+        "description": "REA reverse-engineering agent (170 tools). Same wiring kimi-code already uses. On demand: started by /rea only, stopped when that turn ends, and not in mcp-servers.json, so llama-server never spawns it.",
+        "enabled": true
       },
       "blender": {
         "transport": "streamable-http",
         "url": "http://127.0.0.1:8765/mcp",
-        "description": "Blender MCP addon."
+        "description": "Blender MCP addon.",
+        "enabled": true,
+        "onDemand": false,
+        "toolTimeoutMs": 60000
       },
       "global-brain": {
         "transport": "stdio",
         "command": "brain-system.exe",
-        "args": ["--mcp"],
-        "description": "Global Brain memory vault / session digests. brain-system.exe needs --mcp; without it it starts the tray app and exits."
+        "args": [
+          "--mcp"
+        ],
+        "description": "Global Brain memory vault / session digests. brain-system.exe needs --mcp; without it it starts the tray app and exits.",
+        "enabled": true,
+        "onDemand": false,
+        "toolTimeoutMs": 60000
       }
     }
   },
-
   "search": {
     "$comment": "The private GWN search gateway. The endpoint doctor runs it as a command to keep the provider catalogue current.",
     "server": "C:\\NexusOne\\prototypes\\notecode\\SEARCH_GWN_MCP\\server.mjs",
     "keyFile": "%USERPROFILE%\\.search-gwn\\omni.key",
     "category": "it",
-    "$comment2": "category 'it' is the programming corpus (MDN, Stack Overflow) and is right for code questions. The doctor searches in 'general' (the open web) because a vendor's base URL lives on its own docs site: 'MiniMax API base URL' in 'it' returns articles about the URL API, in 'general' it returns the MiniMax docs.",
+    "$comment2": "category \u0027it\u0027 is the programming corpus (MDN, Stack Overflow) and is right for code questions. The doctor searches in \u0027general\u0027 (the open web) because a vendor\u0027s base URL lives on its own docs site: \u0027MiniMax API base URL\u0027 in \u0027it\u0027 returns articles about the URL API, in \u0027general\u0027 it returns the MiniMax docs.",
     "doctorCategory": "general",
     "limit": 5
   },
-
   "skills": {
     "$comment": "Folders that hold skills. Each skill is a folder with a SKILL.md in it. /skills lists them, /skill loads one.",
     "roots": [
@@ -149,7 +178,6 @@
       "%USERPROFILE%\\.minimax\\agents\\mavis\\skills"
     ]
   },
-
   "kimi": {
     "$comment": "kimi-code CLI launched inside the notecode terminal pane.",
     "exe": "%USERPROFILE%\\.kimi-code\\bin\\kimi.exe",
@@ -163,17 +191,18 @@
       "api_key": "notecode-local",
       "model": "notecode-minicpm",
       "max_context_size": 12288,
-      "capabilities": ["tool_use"]
+      "capabilities": [
+        "tool_use"
+      ]
     }
   },
-
   "ui": {
     "$comment": "How big the text is. Microsoft sets 10 point as the floor for WinForms text whose size the user cannot change; here it can be changed, and 1.00 is that floor. /fontsize writes this.",
-    "fontScale": 1.0
+    "fontScale": 1
   },
-
   "chat": {
-    "$comment": "How a chat turn is put together. All of it is prompt, which the CPU re-reads for every token it writes. Settings > Chat & tools edits this.",
+    "$comment": "How a chat turn is put together. All of it is prompt, which the CPU re-reads for every token it writes. Settings \u003E Chat \u0026 tools edits this.",
+    "showThinking": true,
     "editorContext": true,
     "editorContextChars": 6000,
     "toolResultChars": 4000,
@@ -185,7 +214,6 @@
     "sendInstructions": true,
     "instructionsChars": 8000
   },
-
   "editor": {
     "$comment": "CodeMirror 5 is vendored locally under src/Notecode.App/wwwroot/vendor so the IDE works fully offline.",
     "mode": "text/x-csrc",
@@ -194,9 +222,8 @@
     "tabSize": 4,
     "lineWrapping": false
   },
-
   "workspace": {
     "root": "C:\\NexusOne\\prototypes\\notecode\\workspace",
-    "$comment": "llama-server's working directory. The built-in file tools are scoped to this tree."
+    "$comment": "llama-server\u0027s working directory. The built-in file tools are scoped to this tree."
   }
 }

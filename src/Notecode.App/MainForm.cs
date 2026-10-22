@@ -1853,7 +1853,8 @@ internal sealed class MainForm : Form
         }
 
         var model = provider.Model.Length > 0 ? provider.Model : provider.Models.FirstOrDefault() ?? "no model";
-        return $"{provider.Label} · {model}";
+        var effort = string.IsNullOrWhiteSpace(provider.ReasoningEffort) ? "" : $" · {provider.ReasoningEffort}";
+        return $"{provider.Label} · {model}{effort}";
     }
 
     private static string SettingsPageFor(string argument)
@@ -3833,6 +3834,9 @@ capabilities = [ ""tool_use"" ]
             };
             Action<string> onReasoning = reasoning =>
             {
+                // Settings > Model & reasoning: thinking can be hidden, leaving
+                // only the blinker and its timer.
+                if (!_cfg.Chat.ShowThinking) return;
                 if (InvokeRequired) BeginInvoke(() => _chat.Reasoning(reasoning));
                 else _chat.Reasoning(reasoning);
             };
