@@ -1413,7 +1413,7 @@ internal sealed class MainForm : Form
                     PostToEditor(new { type = "load", path, content, mode = ModeFor(path, content) });
                     AppLog.Write("watch", $"refreshed {path}");
                 }
-                else if (_autoOpenExternal && !IsIgnoredPath(path))
+                else if (_autoOpenExternal && !IsIgnoredPath(path) && !IsGeneratedJobFile(path))
                 {
                     OpenTab(path);
                     AppLog.Write("watch", $"auto-opened new file {path}");
@@ -1428,6 +1428,17 @@ internal sealed class MainForm : Form
     }
 
     private bool _autoOpenExternal = true;
+
+    /// <summary>
+    /// Folders a generator (/img2threejs) is writing a whole job into. Their files
+    /// show up in the tree but are not opened as tabs: a job writes a dozen files,
+    /// some of them binary or a minified library, and none of them was asked for
+    /// in the editor.
+    /// </summary>
+    private readonly List<string> _generatedJobFolders = new();
+
+    private bool IsGeneratedJobFile(string path) =>
+        _generatedJobFolders.Any(f => path.StartsWith(f + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsIgnoredPath(string path)
     {
@@ -2084,7 +2095,11 @@ capabilities = [ ""tool_use"" ]
     // ------------------------------------------------------------------ commands
 
     /// <summary>Runs a slash command.</summary>
-    private async Task RunCommandAsync(ParsedCommand cmd)
+    /// <param name="attachment">
+    /// the file that was attached when the command was sent. Only /img2threejs uses
+    /// it; when it is null the command takes whatever is still in the attachment slot.
+    /// </param>
+    private async Task RunCommandAsync(ParsedCommand cmd, PendingAttachment? attachment = null)
     {
         _aiInput.Clear();
         ClosePalette();
@@ -2093,6 +2108,7 @@ capabilities = [ ""tool_use"" ]
         {
             case "help": CmdHelp(cmd.Arguments); break;
             case "rea": await CmdReaAsync(cmd.Arguments); break;
+            case "img2threejs": await CmdImg2ThreejsAsync(cmd.Arguments, attachment ?? TakeAttachment()); break;
             case "model": await CmdModelAsync(cmd.Arguments); break;
             case "provider": CmdProvider(cmd.Arguments); break;
             case "providers": CmdProviders(); break;
@@ -2173,6 +2189,11 @@ capabilities = [ ""tool_use"" ]
 
         try
         {
+            // `auto` is a new folder per job under assets\REA_outputs.
+            if (destination.Equals("auto", StringComparison.OrdinalIgnoreCase))
+                destPath = AssetFolders.NewJobFolder(
+                    Path.Combine(AssetFolders.Ensure(_cfg.Workspace.Root), "REA_outputs"),
+                    Path.GetFileNameWithoutExtension(project));
             Directory.CreateDirectory(destPath);
         }
         catch (Exception ex)
@@ -2215,6 +2236,252 @@ capabilities = [ ""tool_use"" ]
             await _mcp.ReleaseAsync("rea");
             BeginInvoke(UpdateMcpStatus);
         }
+    }
+
+    /// <summary>Takes the file out of the attachment slot, clearing the chip.</summary>
+    private PendingAttachment? TakeAttachment()
+    {
+        var attachment = _pendingAttachment;
+        _pendingAttachment = null;
+        _aiImageChip.Visible = false;
+        _aiImageChip.Controls.Clear();
+        return attachment;
+    }
+
+    /// <summary>
+    /// Runs the img2threejs pipeline on a picture: the attached one, or one named
+    /// with --image. The job goes into a new folder under the output folder the
+    /// user picks (assets\img2threejs in the workspace unless they choose another).
+    ///
+    /// The bundled runtime\img2threejs\notecode_job.py does the work - intake,
+    /// starter spec, the relief model, the GLB and the viewer - and prints its
+    /// manifest. When the user also said what they want, the model gets a turn to
+    /// carry the job on from those files.
+    /// </summary>
+    private async Task CmdImg2ThreejsAsync(string argument, PendingAttachment? attachment)
+    {
+        const string kind = "notecode · img2threejs";
+
+        string? outDir = null, image = null, name = null;
+        bool open = true;
+        var rest = new List<string>();
+        var tokens = Tokenize(argument);
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var t = tokens[i];
+            if (t is "--out" or "--image" or "--name" && i + 1 < tokens.Count)
+            {
+                var value = tokens[++i];
+                if (t == "--out") outDir = value;
+                else if (t == "--image") image = value;
+                else name = value;
+            }
+            else if (t == "--no-open") open = false;
+            else rest.Add(t);
+        }
+        var instructions = string.Join(" ", rest);
+
+        if (image is null)
+        {
+            if (attachment is { IsImage: true }) image = attachment.Path;
+            else
+            {
+                _chat.Note(
+                    (attachment is null ? "" : $"`{attachment.Name}` is not a picture. ") +
+                    "`/img2threejs` needs a picture: attach one with the paperclip, or name one with `--image <path>`.\n\n" +
+                    "```\n/img2threejs\n/img2threejs --name \"my logo\" --out D:\\models\n```", kind);
+                return;
+            }
+        }
+        image = Path.GetFullPath(Path.IsPathRooted(image) ? image : Path.Combine(_cfg.Workspace.Root, image));
+        if (!File.Exists(image))
+        {
+            _chat.Note($"There is no picture at `{image}`.", kind);
+            return;
+        }
+
+        var script = Path.Combine(_cfg.RuntimeDir, "img2threejs", "notecode_job.py");
+        if (!File.Exists(script))
+        {
+            _chat.Note($"The img2threejs pipeline is missing: `{script}` was not found.", kind);
+            return;
+        }
+
+        var python = FindPython();
+        if (python is null)
+        {
+            _chat.Note("img2threejs needs Python 3.10 or newer, and neither `python` nor `py` was found on the PATH.", kind);
+            return;
+        }
+
+        // The asset tree, and the folder this job goes into. Without --out the
+        // user is asked, with assets\img2threejs already chosen.
+        string defaultOut;
+        try { defaultOut = Path.Combine(AssetFolders.Ensure(_cfg.Workspace.Root), "img2threejs"); }
+        catch (Exception ex)
+        {
+            _chat.Note($"The assets folder could not be created: {ex.Message}", kind);
+            return;
+        }
+
+        if (outDir is null)
+        {
+            using var dlg = new FolderBrowserDialog
+            {
+                Description = "Output folder for this img2threejs job (a new folder is made inside it)",
+                UseDescriptionForTitle = true,
+                SelectedPath = defaultOut,
+                InitialDirectory = defaultOut,
+                ShowNewFolderButton = true
+            };
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+            {
+                _chat.Note("Cancelled: no output folder was chosen.", kind);
+                return;
+            }
+            outDir = dlg.SelectedPath;
+        }
+        else if (!Path.IsPathRooted(outDir))
+        {
+            outDir = Path.Combine(_cfg.Workspace.Root, outDir);
+        }
+
+        name ??= Path.GetFileNameWithoutExtension(image);
+        string jobDir;
+        try { jobDir = Path.GetFullPath(AssetFolders.NewJobFolder(outDir, name)); }
+        catch (Exception ex)
+        {
+            _chat.Note($"The job folder could not be created in `{outDir}`: {ex.Message}", kind);
+            return;
+        }
+        _generatedJobFolders.Add(jobDir);
+
+        _chat.User($"/img2threejs {argument}".TrimEnd(), attachment?.DataUrl, attachment?.Name);
+        _chat.Activity("tool", $"img2threejs: {Path.GetFileName(image)} → {jobDir}");
+        AppLog.Write("img2threejs", $"job {jobDir} from {image}");
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = python.Value.Exe,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(script)!
+        };
+        foreach (var a in python.Value.Args) psi.ArgumentList.Add(a);
+        psi.ArgumentList.Add(script);
+        psi.ArgumentList.Add("--image"); psi.ArgumentList.Add(image);
+        psi.ArgumentList.Add("--out"); psi.ArgumentList.Add(outDir);
+        psi.ArgumentList.Add("--job-dir"); psi.ArgumentList.Add(jobDir);
+        psi.ArgumentList.Add("--name"); psi.ArgumentList.Add(name);
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+
+        string stdout, stderr;
+        int exitCode;
+        try
+        {
+            using var proc = Process.Start(psi)!;
+            var outTask = proc.StandardOutput.ReadToEndAsync();
+            var errTask = proc.StandardError.ReadToEndAsync();
+            var exited = proc.WaitForExitAsync();
+            if (await Task.WhenAny(exited, Task.Delay(TimeSpan.FromMinutes(5))) != exited)
+            {
+                try { proc.Kill(true); } catch { }
+                _chat.Note("img2threejs did not finish in five minutes and was stopped.", kind);
+                return;
+            }
+            stdout = await outTask;
+            stderr = await errTask;
+            exitCode = proc.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            _chat.Note($"img2threejs could not be started: {ex.Message}", kind);
+            return;
+        }
+
+        JsonNode? manifest = null;
+        var lastLine = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim();
+        try { if (lastLine is not null) manifest = JsonNode.Parse(lastLine); } catch { }
+
+        if (exitCode != 0 || manifest?["ok"]?.GetValue<bool>() != true)
+        {
+            var why = manifest?["error"]?.ToString() ?? stderr.Trim();
+            if (why.Length > 1500) why = why[^1500..];
+            AppLog.Warn($"img2threejs failed ({exitCode}): {why}");
+            _chat.Note($"img2threejs failed (exit {exitCode}).\n\n```\n{why}\n```", kind);
+            return;
+        }
+
+        var steps = manifest["steps"]?.AsArray()
+            .Select(s => $"{s?["step"]} {(s?["ok"]?.GetValue<bool>() == true ? "✓" : "✗")}") ?? Enumerable.Empty<string>();
+        var triangles = manifest["mesh"]?["triangles"]?.GetValue<int>() ?? 0;
+        var viewer = Path.Combine(jobDir, "viewer.html");
+        _chat.Note(
+            $"**{name}** is built.\n\n" +
+            $"Job folder: `{jobDir}`\n\n" +
+            "- `viewer.html` - the model in a browser (offline)\n" +
+            "- `src\\createObjectModel.js` - procedural Three.js, ES module\n" +
+            $"- `model.glb` - for Blender and Unity ({triangles:N0} triangles)\n" +
+            "- `object-sculpt-spec.json` - the starter sculpt spec for the full pipeline\n" +
+            "- `job.json` - every step and its output\n\n" +
+            $"Steps: {string.Join(" · ", steps)}\n\n" +
+            "This first model is a 2.5D relief from one picture: approximate, with no back or hidden depth.",
+            kind);
+
+        if (open && File.Exists(viewer))
+        {
+            try { Process.Start(new ProcessStartInfo(viewer) { UseShellExecute = true }); }
+            catch (Exception ex) { AppLog.Warn($"the viewer could not be opened: {ex.Message}"); }
+        }
+
+        if (instructions.Length == 0) return;
+
+        // The user asked for more than the relief: the model carries the job on.
+        var skill = Path.Combine(_cfg.RuntimeDir, "img2threejs", "SKILL.md");
+        var prompt =
+            "[img2threejs job]\n" +
+            $"job folder: {jobDir}\n" +
+            $"reference: {Path.Combine(jobDir, "reference.png")}\n" +
+            $"current model: {Path.Combine(jobDir, "src", "createObjectModel.js")} (2.5D relief, ES module, export createObjectModel)\n" +
+            $"starter spec: {Path.Combine(jobDir, "object-sculpt-spec.json")}\n" +
+            $"pipeline: {Path.GetDirectoryName(script)} (rules in {skill}; forge scripts are Python stdlib)\n" +
+            $"request: {instructions}\n\n" +
+            "Work only inside the job folder. Change createObjectModel.js (or author the spec and run the forge " +
+            "passes) to do what was asked, keep the export name, and say plainly what is approximate. " +
+            "Finish with the list of files you changed.";
+        await RunAiTurnAsync(prompt, includeRea: false, attachment);
+    }
+
+    /// <summary>
+    /// A Python 3 to run the bundled pipeline with: python.exe on the PATH, or the
+    /// py launcher. The Microsoft Store stub in WindowsApps is skipped - it opens
+    /// the Store instead of running anything.
+    /// </summary>
+    private static (string Exe, string[] Args)? FindPython()
+    {
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (dir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                var exe = Path.Combine(dir.Trim('"'), "python.exe");
+                if (File.Exists(exe)) return (exe, Array.Empty<string>());
+            }
+            catch { /* a malformed PATH entry */ }
+        }
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                var exe = Path.Combine(dir.Trim('"'), "py.exe");
+                if (File.Exists(exe)) return (exe, new[] { "-3" });
+            }
+            catch { }
+        }
+        return null;
     }
 
     private async Task CmdModelAsync(string argument)
@@ -3464,7 +3731,7 @@ capabilities = [ ""tool_use"" ]
         var parsed = SlashCommandParser.Parse(prompt);
         if (parsed is not null)
         {
-            await RunCommandAsync(parsed);
+            await RunCommandAsync(parsed, attachment);
             return;
         }
         if (SlashCommandParser.LooksLikeCommand(prompt))

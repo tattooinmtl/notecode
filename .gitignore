@@ -108,6 +108,9 @@ assets/_*
 !/README.md
 !/docs/*.md
 !/finalAudit.md
+# The bundled img2threejs pipeline: SKILL.md routes to its grimoire and docs.
+!/runtime/img2threejs/**/*.md
+__pycache__/
 
 # --------------------------------------------------------------------- macOS
 .DS_Store
