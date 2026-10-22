@@ -59,6 +59,10 @@ internal static class Program
         try { Directory.CreateDirectory(cfg.Workspace.Root); }
         catch { /* surfaced later by the explorer */ }
 
+        // The asset tree the generators write into (img2threejs, REA, Blender...).
+        try { AssetFolders.Ensure(cfg.Workspace.Root); }
+        catch (Exception ex) { AppLog.Warn($"the assets folder could not be created: {ex.Message}"); }
+
         // The fonts are the user's to scale, so the scale is read before any
         // control is built and every one of them gets the size the user chose.
         Theme.ApplyFontScale(cfg.Ui.FontScale);

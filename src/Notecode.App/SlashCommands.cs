@@ -80,10 +80,57 @@ internal static class SlashCommands
             The model then drives the REA tools and writes the results to the
             destination.
 
+            An output destination of `auto` makes a new folder for the job under
+            `assets\REA_outputs` in the workspace, for example
+            `/rea kimi.exe auto list the exports`.
+
             The output destination is created if it does not exist. If you leave the
             actions empty the model asks what to look for instead of guessing.
             """,
             new[] { "reverse" }),
+
+        new(
+            "img2threejs",
+            "Turn the attached picture into a Three.js model",
+            "/img2threejs [--out <folder>] [--name <name>] [what you want]",
+            """
+            **/img2threejs** - run the img2threejs pipeline on a picture.
+
+            Attach the picture with the paperclip first, then type:
+
+            ```
+            /img2threejs
+            /img2threejs --name "notecode logo"
+            /img2threejs --out D:\models make the nodes glossy and the plate matte
+            ```
+
+            | Part | What it means |
+            |---|---|
+            | `--out <folder>` | where the job folder goes. Without it you are asked, and the suggested folder is `assets\img2threejs` in the workspace |
+            | `--name <name>` | the model's name (default: the picture's file name) |
+            | `--image <path>` | a picture on disk, instead of the attachment |
+            | `--no-open` | do not open the viewer when the job is done |
+            | what you want | optional. When it is there, the model carries the job on from the files the pipeline wrote |
+
+            Every run gets a new folder, `<name>-<date>-<time>`, with:
+
+            - `reference.png`, `intake\probe.json`, `assessment.json`, `object-sculpt-spec.json`
+              and `.img2threejs\state.json` - the img2threejs intake and starter spec;
+            - `src\createObjectModel.js` - the model as procedural Three.js (an ES module);
+            - `model.glb` - the same mesh for Blender and Unity;
+            - `viewer.html` - opens offline in a browser, three.js is copied beside it;
+            - `job.json` - every step and its result.
+
+            The first model is a 2.5D relief: the outline becomes a solid plate and the
+            parts that stand out in colour are raised from it. That is the right shape
+            for a logo, an icon or a badge. One picture cannot show depth or the back,
+            so for anything else it is a blockout to refine.
+
+            The pipeline is bundled in `runtime\img2threejs` and needs Python 3.10 or
+            newer. The workspace also gets an `assets` tree with `blender`, `unity`,
+            `img2threejs`, `threejs`, `textures`, `logos` and `REA_outputs`.
+            """,
+            new[] { "i2t", "3d" }),
 
         new(
             "model",

@@ -81,6 +81,14 @@ foreach ($name in @('notecode-llama.ps1', 'notecode-mcp.mjs', 'mcp-stdio-bridge.
     if (Test-Path $src) { Copy-Item $src $runtimeOut -Force }
 }
 Copy-Item (Join-Path $root 'runtime\notecode.config.json') $runtimeOut -Force
+# The img2threejs pipeline /img2threejs runs: forge, grimoire, docs, the job
+# runner and the vendored three.js for the offline viewer.
+$i2tSrc = Join-Path $runtimeSrc 'img2threejs'
+if (Test-Path $i2tSrc) {
+    Copy-Item $i2tSrc $runtimeOut -Recurse -Force
+    Get-ChildItem (Join-Path $runtimeOut 'img2threejs') -Recurse -Directory -Filter '__pycache__' |
+        Remove-Item -Recurse -Force
+}
 Write-Ok "the runtime files are staged"
 
 # The icon, so the installed shortcut wears the same one.
