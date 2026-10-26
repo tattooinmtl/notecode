@@ -407,6 +407,65 @@ and press **Start**.
 
 ---
 
+## Meshy
+
+Meshy makes 3D models. It reaches notecode through **two** servers, and they do
+different jobs:
+
+| Server | What it is | Tools |
+|---|---|---|
+| `meshy` | The Meshy **cloud API** — generation, texturing, rigging, animation, conversion. | 28 |
+| `meshy-dcc` | The Meshy **DCC gateway** — the live Blender and Unity instances that register themselves. | 4 |
+
+The cloud API makes the model; the gateway puts it where the user can see it.
+
+**The sources** are cloned under `meshy/` from the `meshy-dev` GitHub org: the MCP
+server, the DCC adapters, the agent skill pack and the Unity plugin. That folder is
+gitignored — each upstream repository is its own git repository with its own history,
+so they are checked out rather than committed here. `scripts/setup-meshy.ps1` puts
+them back: clone, build, install, place.
+
+**The MCP server is built from source.** `meshy/meshy-mcp-server` is a TypeScript
+project; `npm install && npm run build` produces `dist/`, and that is what the
+`meshy` entry starts. It is launched through `scripts/meshy-mcp.cmd` rather than
+straight at `node dist/index.js`, because the server reads its `.env` with dotenv
+and dotenv resolves `.env` against the **current working directory** — and notecode
+starts MCP servers with its own working directory. The launcher `cd`s first.
+
+**The key** lives in `meshy/meshy-mcp-server/.env` as `MESHY_API_KEY`, and that file is
+gitignored on purpose. The server checks the key on the first tool call, not at
+startup, so it starts and lists all 28 tools with an empty key and only fails when
+something is actually generated. The API needs a Meshy **Pro plan or above**.
+
+**The DCC side** is the Meshy DCC core (`meshy-dcc` 0.2.0), installed from the
+vendor's signed release into `~/.local/bin`. The gateway runs as
+`meshy-dcc-server.exe` on `127.0.0.1:19765` and publishes exactly four tools —
+`search`, `describe`, `load_skill`, `call` — because the full backend surface is far
+too large to hand a model. The Blender adapter is a Blender **extension**; the Unity
+adapter is an editor package (`ai.meshy.dcc`) inside the project's `Packages` folder.
+
+**A DCC only becomes an instance when its host application is running.** The Blender
+extension registers itself when Blender opens and deregisters when Blender closes;
+the Unity package does the same when Unity opens the project. `search` on the
+gateway finds nothing until then.
+
+**The skill.** `skills/meshy-3d/SKILL.md` tells the model the three-step shape of a
+generation (create → wait → download), which calls cost credits, and — because the
+vendor's own instructions name only 25 of the 28 tools — that `meshy_check_balance`,
+`meshy_list_usage` and `meshy_cancel_task` exist and should be used. Install it with
+`/addskills skills\meshy-3d\SKILL.md`.
+
+**Checking the wiring:**
+
+```powershell
+node .\scripts\verify-meshy.mjs        # both servers answer, and publish what they should
+node .\scripts\rea-meshy-probe.mjs     # REA over the bundle, diffed against the live catalogue
+```
+
+The findings of that second command are written up in `docs/rea-meshy-findings.md`.
+
+---
+
 ## Accessibility
 
 The app is dark, owner-drawn and paints almost every pixel itself, so its accessibility is
@@ -534,9 +593,15 @@ prototypes/notecode/
 │  └─ workspace/               the llama-server working directory (model file tools are scoped here)
 │     └─ vendor/blender-reference/   the Blender API reference, manual and add-on source
 ├─ skills/
-│  └─ blender-scene/SKILL.md   the skill that puts the Blender tools in front of the model
+│  ├─ blender-scene/SKILL.md   the skill that puts the Blender tools in front of the model
+│  └─ meshy-3d/SKILL.md        the skill that puts the Meshy tools in front of the model
 ├─ scripts/
 │  ├─ build.ps1
+│  ├─ setup-meshy.ps1            clones the Meshy sources, builds the MCP server, places the adapters
+│  ├─ verify-meshy.mjs           checks both Meshy servers answer, and publish what they should
+│  ├─ rea-meshy-probe.mjs        drives REA over the Meshy bundle and diffs static against live
+│  ├─ place-unity-meshy-package.py   puts the Unity adapter into a project without an editor
+│  ├─ meshy-mcp.cmd              the launcher the `meshy` server entry points at
 │  ├─ smoke-test.ps1              20 layers, config -> PE image -> tool catalogue
 │  ├─ ui-tool-smoke.ps1           drives the GUI: prompt -> tool call -> file in the editor
 │  ├─ ui-agent-files.ps1          the agent writes a page, it opens as a tab, the cross closes it
@@ -841,7 +906,7 @@ build the hardware scan picked, and which model that build is serving.
 
 ## MCP
 
-Four servers, defined once in `runtime/notecode.config.json` and mirrored into
+Six servers, defined once in `runtime/notecode.config.json` and mirrored into
 `runtime/mcp-servers.json` for llama-server.
 
 | Server | Transport | Notes |
@@ -850,6 +915,8 @@ Four servers, defined once in `runtime/notecode.config.json` and mirrored into
 | `rea` | stdio | `npx -y rea-agents@6.4.0 mcp` — 170 reverse-engineering tools. Same wiring kimi-code already uses. |
 | `blender` | streamable-http | Blender addon on `127.0.0.1:8765`. Reaches llama-server through `mcp-stdio-bridge.mjs`. |
 | `global-brain` | stdio | `brain-system.exe` — memory vault / session digests. |
+| `meshy` | stdio | `scripts/meshy-mcp.cmd` — the Meshy cloud API. 28 generation tools. |
+| `meshy-dcc` | streamable-http | The Meshy DCC gateway on `127.0.0.1:19765`. The live Blender and Unity adapters, reached through four tools. |
 
 **Why the bridge exists:** llama.cpp's `--mcp-servers-config` parser is stdio-only. It
 reads `command`, `cwd`, `args`, `env` and `timeout_ms`, and **silently skips** any entry
