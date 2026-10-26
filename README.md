@@ -708,6 +708,20 @@ notecode  hardware scan
 starting notecode ...
 ```
 
+Above the scan the splash plays the NoteCode Ultra brand film. It is a WebM in
+`wwwroot/media`, played by the same WebView2 the editor uses, and it starts
+muted - clicking the film turns the sound on.
+
+The file is AV1 in a WebM, and it is a fifth of the size of the MP4 it was made
+from: 221 KB against 792 KB. AV1 handles the dust in the film far better than
+H.264 or VP9 did, all of which spent most of their bits on the grain. The film
+is also trimmed to the part that ends on the title card, because the splash is
+only up for the few seconds the scan takes and the card is the whole point of
+it. `scripts/build-splash-video.ps1` rebuilds the file from the MP4.
+
+If the video cannot be played at all - no runtime, no file - the animation is
+taken out of the window and the scan takes the whole of it.
+
 The scan takes **83 ms**, because it reads DXGI rather than asking WMI: WMI's
 `AdapterRAM` is a 32-bit field, so an 8 GiB card reports 4 GiB, and an
 integrated GPU reports the system memory it borrows as if it were its own.

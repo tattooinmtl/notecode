@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>notecode</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+  #stage { position: fixed; inset: 0; background: #000; }
+  #v {
+    width: 100%; height: 100%; object-fit: cover; display: block; background: #000;
+    /* The animation fades in over the black rather than cutting to it. */
+    opacity: 0; transition: opacity .45s ease;
+  }
+  #v.running { opacity: 1; }
+
+  /* The one thing the user cannot guess: the animation has sound and it
+     starts muted. The hint shows itself once the animation is running and
+     then fades away - it is a note about the splash, not text to be read. */
+  #hint {
+    position: fixed; right: 14px; bottom: 10px;
+    font: 11px/1.2 Consolas, "Cascadia Mono", monospace;
+    letter-spacing: .06em;
+    color: rgba(255, 255, 255, .42);
+    opacity: 0; transition: opacity .6s ease;
+    pointer-events: none; user-select: none;
+  }
+  #hint.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <video id="v" src="media/notecode-ultra.webm" autoplay muted playsinline preload="auto"></video>
+  </div>
+  <div id="hint">click for sound</div>
+
+<script>
+(function () {
+  var v = document.getElementById('v');
+  var hint = document.getElementById('hint');
+  var hintTimer = null;
+
+  function post(type) {
+    try { window.chrome.webview.postMessage(type); } catch (e) { /* not in a host */ }
+  }
+
+  // If the file is missing, or the machine cannot play it, the host is told
+  // and takes the animation out of the window rather than showing a dead
+  // rectangle.
+  v.addEventListener('error', function () { post('video-error'); });
+
+  // The animation fades in over the black rather than cutting to it, and the
+  // fallback timer is there so that a browser which never starts the video
+  // cannot leave the window black.
+  function show() { v.classList.add('running'); }
+  v.addEventListener('loadeddata', show);
+  v.addEventListener('playing', function () {
+    post('playing');
+    show();
+    hint.classList.add('show');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(function () { hint.classList.remove('show'); }, 6400);
+  });
+  setTimeout(show, 2500);
+
+  // The animation is meant to end on the title card, so it is played once and
+  // the last frame is held. Looping it would snap back to the first frame and
+  // throw away the card the video was built around.
+  v.addEventListener('ended', function () { post('ended'); });
+
+  document.addEventListener('click', function () {
+    v.muted = !v.muted;
+    hint.textContent = v.muted ? 'click for sound' : 'sound on';
+    hint.classList.add('show');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(function () { hint.classList.remove('show'); }, 2400);
+  });
+
+  // Muted autoplay is allowed, so this normally does nothing. It is here for
+  // the case where the browser refused the automatic start.
+  var started = v.play();
+  if (started && started.catch) started.catch(function () { /* the hint says it is muted anyway */ });
+})();
+</script>
+</body>
+</html>

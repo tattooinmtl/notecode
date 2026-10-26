@@ -1,19 +1,27 @@
 using System.Drawing.Drawing2D;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 
 namespace Notecode.App;
 
 /// <summary>
 /// The window notecode shows before it opens.
 ///
-/// It looks like a terminal because that is what it is doing: it is scanning the
-/// machine and writing down what it found, one line at a time, before the editor
-/// comes up. The scan is the slow part of starting on a new machine - it has to
-/// ask Windows how much video memory the display adapter really has, and the
-/// answer decides which llama.cpp build can run here - so it is worth watching
-/// rather than hiding.
+/// It has two halves. The top is the brand animation: a WebView2 playing a
+/// short WebM, muted, played once so that it settles on the title card. The
+/// bottom is the scan. It looks like a terminal because that is what it is
+/// doing: it is scanning the machine and writing down what it found, one line
+/// at a time, before the editor comes up. The scan is the slow part of
+/// starting on a new machine - it has to ask Windows how much video memory
+/// the display adapter really has, and the answer decides which llama.cpp build
+/// can run here - so it is worth watching rather than hiding.
 ///
 /// The scan runs off the UI thread. The lines are written as the answers arrive,
 /// not after everything is finished, so the window shows the scan happening.
+///
+/// The animation is a courtesy: if it cannot be played - no runtime, no file -
+/// the stage collapses and the scan takes the whole window, so a missing video
+/// is a plainer splash rather than a broken one.
 /// </summary>
 internal sealed class SplashForm : Form
 {
@@ -25,7 +33,19 @@ internal sealed class SplashForm : Form
     private static readonly Color TerminalBad = ColorTranslator.FromHtml("#FF6060");
     private static readonly Color TerminalCyan = ColorTranslator.FromHtml("#5EE7FF");
 
+    /// <summary>The widest the window is allowed to get, in pixels.</summary>
+    private const int MaxWidth = 840;
+
+    /// <summary>The scan band under the animation, in pixels.</summary>
+    private const int MaxConsoleHeight = 120;
+
+    /// <summary>The narrowest the window is allowed to get, in pixels.</summary>
+    private const int MinWidth = 480;
+
     private readonly RichTextBox _console;
+    private readonly Panel _stage;
+    private readonly Panel _rule;
+    private readonly WebView2 _video;
     private readonly Font _font;
     private readonly AppConfig _cfg;
     private readonly HardwareProfileStore _store;
@@ -45,13 +65,15 @@ internal sealed class SplashForm : Form
         _cfg = cfg;
         _store = store;
 
-        Text = "notecode - hardware scan";
+        Text = "notecode";
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = false;
         BackColor = Color.Black;
-        ClientSize = new Size(820, 430);
         KeyPreview = true;
+
+        var (size, videoHeight) = Measure();
+        ClientSize = size;
 
         _font = new Font(Theme.CodeFamily, 11f * Theme.FontScale, GraphicsUnit.Point);
 
@@ -66,35 +88,135 @@ internal sealed class SplashForm : Form
             DetectUrls = false,
             HideSelection = true,
             ScrollBars = RichTextBoxScrollBars.None,
-            WordWrap = false,
+
+            // The box wraps instead of scrolling sideways. Without this the
+            // longest line - the memory check - scrolls the whole box to the
+            // right and every line loses its left edge, which is a bad way to
+            // read a scan.
+            WordWrap = true,
             TabStop = true,
             AccessibleName = "Hardware scan output"
         };
         _console.MouseEnter += (s, e) => Cursor = Cursors.Default;
 
+        // The animation lives in a panel of its own so that the panel can be
+        // taken out of the window if the video turns out to be unplayable.
+        _stage = new Panel { Dock = DockStyle.Top, Height = videoHeight, BackColor = Color.Black };
+        _video = new WebView2
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.Black,
+
+            // The window behind the animation is black, so the page has to
+            // start black too or there is a white flash while the first frame
+            // is fetched.
+            DefaultBackgroundColor = Color.Black
+        };
+        _stage.Controls.Add(_video);
+
+        // A one-pixel rule under the animation, the way a terminal draws the
+        // line under its header.
+        _rule = new Panel { Dock = DockStyle.Top, Height = 1, BackColor = ColorTranslator.FromHtml("#12351F") };
+
+        // Docking is resolved from the last control backwards, so the filling
+        // control is added first and the panels that sit on top of it after.
         Controls.Add(_console);
+        Controls.Add(_rule);
+        Controls.Add(_stage);
 
         KeyDown += OnKeyDown;
     }
 
-    // ------------------------------------------------------------------ paint
-
-    protected override void OnPaint(PaintEventArgs e)
+    /// <summary>
+    /// Works out how big the window should be.
+    ///
+    /// The animation is 16:9 and it is shown at the full width of the window,
+    /// so the width decides the height of the top half. The window is kept
+    /// inside the working area of the screen: a splash taller than the screen
+    /// is a splash whose bottom half the user never sees.
+    /// </summary>
+    private static (Size size, int videoHeight) Measure()
     {
-        base.OnPaint(e);
+        var work = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
 
-        // A one-pixel frame, the way a terminal draws its border.
-        using var pen = new Pen(ColorTranslator.FromHtml("#12351F"));
-        e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        var width = Math.Min(MaxWidth, Math.Max(MinWidth, work.Width - 60));
+        var videoHeight = (int)Math.Round(width * 9.0 / 16.0);
+        var consoleHeight = Math.Clamp(work.Height - videoHeight - 60, 90, MaxConsoleHeight);
+
+        return (new Size(width, videoHeight + consoleHeight), videoHeight);
     }
 
-    // ------------------------------------------------------------------- scan
+    // ------------------------------------------------------------------ video
 
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+
+        // The animation and the scan run side by side. Neither waits for the
+        // other: the scan is the slow part, so it starts straight away.
+        _ = InitVideoAsync();
         _ = RunAsync();
     }
+
+    /// <summary>
+    /// Starts the brand animation.
+    ///
+    /// The video is played by a WebView2 because that is what can play a WebM,
+    /// and the app already carries a WebView2 for the editor and the terminal.
+    /// The browser process it starts is shared with the ones in the main
+    /// window, so this actually makes the main window start a little faster.
+    /// </summary>
+    private async Task InitVideoAsync()
+    {
+        try
+        {
+            var webroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+            if (!Directory.Exists(webroot)) throw new DirectoryNotFoundException(webroot);
+
+            var env = await CoreWebView2Environment.CreateAsync(
+                null, Path.Combine(Path.GetTempPath(), "notecode-webview"));
+            await _video.EnsureCoreWebView2Async(env);
+
+            _video.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                "notecode.local", webroot, CoreWebView2HostResourceAccessKind.DenyCors);
+            _video.CoreWebView2.Settings.AreDevToolsEnabled = false;
+            _video.CoreWebView2.Settings.AreHostObjectsAllowed = false;
+            _video.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+
+            _video.CoreWebView2.WebMessageReceived += OnVideoMessage;
+            _video.Source = new Uri("https://notecode.local/splash.html");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("splash", "animation unavailable", ex);
+            CollapseStage();
+        }
+    }
+
+    private void OnVideoMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        string message;
+        try { message = e.TryGetWebMessageAsString(); }
+        catch { return; }
+
+        if (message.Contains("video-error", StringComparison.Ordinal)) CollapseStage();
+    }
+
+    /// <summary>
+    /// Takes the animation out of the window and gives the space to the scan.
+    /// </summary>
+    private void CollapseStage()
+    {
+        if (IsDisposed) return;
+        if (InvokeRequired) { BeginInvoke(CollapseStage); return; }
+
+        _stage.Visible = false;
+        _stage.Height = 0;
+        _rule.Visible = false;
+        _rule.Height = 0;
+    }
+
+    // ------------------------------------------------------------------- scan
 
     private async Task RunAsync()
     {
