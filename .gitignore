@@ -100,6 +100,13 @@ assets/_*
 # Scratch folders for a throwaway probe.
 .tmp-*/
 
+# ------------------------------------------------------------ vendored sources
+# meshy/ holds clones of the upstream Meshy repositories: the MCP server, the
+# DCC adapters and the agent skill pack. Each one is its own git repository
+# with its own history, so they are checked out rather than committed here.
+# scripts/setup-meshy.ps1 puts them back: clone, install, build.
+meshy/
+
 # ------------------------------------------------------------------- markdown
 # Ignored, with the files the app binds kept.
 *.md

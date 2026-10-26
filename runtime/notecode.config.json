@@ -159,6 +159,27 @@
         "enabled": true,
         "onDemand": false,
         "toolTimeoutMs": 60000
+      },
+      "meshy": {
+        "transport": "stdio",
+        "command": "cmd.exe",
+        "args": [
+          "/d",
+          "/c",
+          "C:\\NexusOne\\prototypes\\notecode\\scripts\\meshy-mcp.cmd"
+        ],
+        "description": "Meshy AI 3D generation. 28 tools: text/image to 3D, texture, rig, animate, remesh, convert, resize, UV, printability, slicing. Needs MESHY_API_KEY in meshy/meshy-mcp-server/.env (Pro plan or above).",
+        "enabled": true,
+        "onDemand": false,
+        "toolTimeoutMs": 300000
+      },
+      "meshy-dcc": {
+        "transport": "streamable-http",
+        "url": "http://127.0.0.1:19765/mcp",
+        "description": "Meshy DCC gateway - the live Blender and Unity adapters, reached through four tools: search, describe, load_skill, call. The gateway is started by meshy-dcc-server.exe and holds the instances that have self-registered.",
+        "enabled": true,
+        "onDemand": false,
+        "toolTimeoutMs": 120000
       }
     }
   },
