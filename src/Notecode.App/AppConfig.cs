@@ -21,6 +21,7 @@ internal sealed class AppConfig
     public WorkspaceSection Workspace { get; set; } = new();
     public SearchSection Search { get; set; } = new();
     public SkillsSection Skills { get; set; } = new();
+    public CommandPolicyConfig CommandPolicy { get; set; } = new();
 
     public static string Locate()
     {

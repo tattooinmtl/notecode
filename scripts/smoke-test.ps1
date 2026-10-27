@@ -406,6 +406,27 @@ if ($missing.Count -eq 0) {
     Bad 'every preset provider is configured' "missing: $($missing -join ', ')"
 }
 
+# 16 ------------------------------------------------- the command policy
+#
+# The gate that stops a prompt injection from turning into a command running
+# with the user's privileges. It is checked on its own because it is the one
+# thing here that fails open by accident.
+Write-Host ''
+Write-Host '[16] the command policy'
+if (Test-Path $probeProj) {
+    $out = & dotnet run --project $probeProj -c Release -- --command-policy $cfgPath 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    $passes = ([regex]::Matches($out, '\[PASS\]')).Count
+    $fails = ([regex]::Matches($out, '\[FAIL\]')).Count
+    if ($code -eq 0 -and $fails -eq 0 -and $passes -ge 60) {
+        Ok 'the command policy probe' "$passes checks"
+    } else {
+        Bad 'the command policy probe' (($out -split "`n" | Where-Object { $_ -match '\[FAIL\]' }) -join '; ').Trim()
+    }
+} else {
+    Bad 'the command policy probe' "missing $probeProj"
+}
+
 Write-Host ''
 Write-Host '===================' -ForegroundColor Cyan
 Write-Host ("PASS {0}  FAIL {1}  SKIP {2}" -f $script:Pass, $script:Fail, $script:Skip)

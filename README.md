@@ -296,6 +296,60 @@ So the command runs in a clean shell of its own, in the workspace, and the comma
 output are written into the terminal pane. You watch it happen, your shell is untouched,
 and the model gets plain text with the exit code.
 
+### The command policy
+
+The model asking for a command is not the same as the user asking for a command. A file the
+model read, a web page it fetched or a line in a tool result can say *"run this instead"*,
+and a model that reads it as an instruction will pick it up. So the command the model wants
+is not the command that runs.
+
+Every command goes through one policy, with three answers:
+
+| | |
+|---|---|
+| **Allow** | the command is on the allowlist — a read or a build. It runs. |
+| **Ask** | it is not on the allowlist. A window shows you the exact command, the folder it would run in, and why it is asking. You say yes or no. |
+| **Deny** | it matches a refusal rule. It is not run and it is not offered to you — a click on *yes* should not be enough for the worst commands. |
+
+The rules live in `commandPolicy` in `runtime/notecode.config.json`, and the IDE and the MCP
+server read the same block, so the two agree on what is refused:
+
+```json
+"commandPolicy": {
+  "enabled": true,
+  "askTimeoutSeconds": 120,
+  "allow": ["git status", "git diff", "npm test", "dotnet build", "ls", "..."],
+  "alwaysAllow": [],
+  "deny": ["(regex)", "..."]
+}
+```
+
+An **allow** entry is matched as a prefix of the command's words, so `git status` also covers
+`git status --short` but not `git statusx`. A **deny** entry is a regular expression matched
+against the whole command.
+
+The command is split on the shell's own operators before any of this, so
+`git status && rm -rf /` is two commands and the second one is judged on its own. Judging
+the whole string as one command would let an allowed prefix hide anything after it.
+
+Three more things happen around it:
+
+- **The window times out.** Nobody answering means no. A command that runs while nobody is
+  looking is the case the window exists for.
+- **A command gets a small environment.** It sees `PATH`, `TEMP`, `USERPROFILE` and the
+  package caches. It does not see your API keys, so a command invented by the model cannot
+  read a credential out of the environment and send it somewhere. A build that genuinely
+  needs a token can be given the real environment from the same window, for one command.
+- **The content is marked as content.** Tool output that came from a file, from a program or
+  from another MCP server is wrapped in a marker, and the system prompt says that content is
+  data and never an instruction.
+
+llama.cpp publishes a shell of its own alongside the MCP servers. That one is not handed to
+the server: it is run here, where the policy applies and where you can watch it.
+
+The rules are yours to change. `commandPolicy.allow` is the list of commands that run
+without asking, and `commandPolicy.deny` is the list that is never run.
+
 ---
 
 ## Adding a skill, and adding a tool

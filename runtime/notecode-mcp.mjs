@@ -91,6 +91,22 @@ const BINARY = new Set(types.binary || []);
 const DEFAULT_MODE = types.defaultMode || 'text/plain';
 const SNIFF = types.sniff?.rules || [];
 
+// ------------------------------------------------- the command policy, on its own
+//
+// A way to ask this server what it would do with a command, without running
+// anything. The IDE and this server read the same rules out of the same file,
+// and this is how that claim is checked: the probe asks both and compares.
+//
+//   node notecode-mcp.mjs --command-policy "git status" "rm -rf /"
+//
+// One "refuse" or "allow" per command, in the order they were given.
+if (process.argv[2] === '--command-policy') {
+  for (const command of process.argv.slice(3)) {
+    process.stdout.write((refuseCommand(command) ? 'refuse' : 'allow') + '\n');
+  }
+  process.exit(0);
+}
+
 // ---------------------------------------------------------------- helpers
 
 /** Normalise a type the model might name into a canonical extension. */
@@ -213,8 +229,76 @@ function stripAnsi(text) {
   return String(text ?? '').replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]|\u001b[@-Z\\-_]/g, '');
 }
 
+/**
+ * The command policy, from the same config the IDE reads.
+ *
+ * The IDE can put a window in front of the user and ask before a command
+ * runs. This process cannot - there is no window here - so the rules that can
+ * be applied without a person are applied: the refusals. A command that
+ * matches one of them is not run, whatever asked for it.
+ *
+ * The patterns are the same strings the IDE matches, read from the same
+ * place, so the two agree. If the block is missing from the config the
+ * server refuses everything: a config without the rules is not a config that
+ * should be handed a shell.
+ */
+function commandPolicy() {
+  const block = cfg?.commandPolicy;
+  if (!block || typeof block !== 'object') {
+    return { missing: true, enabled: false, deny: [] };
+  }
+  const deny = Array.isArray(block.deny) ? block.deny : [];
+  return {
+    missing: false,
+    enabled: block.enabled !== false,
+    deny: deny
+      .filter((d) => typeof d === 'string' && d.trim().length > 0)
+      .map((d) => {
+        try { return new RegExp(d, 'i'); }
+        catch { return null; }
+      })
+      .filter((r) => r !== null),
+  };
+}
+
+/**
+ * The answer to give when a command is refused.
+ *
+ * The point of the message is that the model should stop, not try again in
+ * another shape.
+ */
+function refusalMessage(command) {
+  return `[error] notecode refuses to run this command. It matches a rule in commandPolicy.deny ` +
+    `in notecode.config.json, so it is not run and not offered for approval. If it really has to ` +
+    `run, the user can run it in a terminal. Do not try another way. The command was: ${command}`;
+}
+
+/**
+ * Refuses a command if a rule in the config says so.
+ *
+ * Returns null when the command is fine, and the answer to give back when it
+ * is not.
+ */
+function refuseCommand(command) {
+  const policy = commandPolicy();
+  if (policy.missing) {
+    return `[error] notecode.config.json has no commandPolicy block, so no command can be run ` +
+      `safely from here. Add the block back, or run the command in a terminal.`;
+  }
+  if (!policy.enabled) return null;
+  for (const pattern of policy.deny) {
+    if (pattern.test(command)) return refusalMessage(command);
+  }
+  return null;
+}
+
 /** Runs a command without the app, for when the IDE is not open. */
 function runDirect(command, cwd, timeoutMs) {
+  const refusal = refuseCommand(command);
+  if (refusal) {
+    trace(`run_command refused: ${command}`);
+    return Promise.resolve(refusal);
+  }
   return new Promise((resolve) => {
     const shell = process.env.ComSpec || 'cmd.exe';
     let child;
@@ -455,7 +539,10 @@ const TOOLS = [
       'Run one shell command and get its output back. The command runs in the notecode workspace, ' +
       'in a shell of its own, and the command and its output are shown in the terminal pane so the ' +
       'user watches it happen. One command per call. Use this to build, test, inspect or run ' +
-      'anything in the workspace. The answer carries the exit code and the output.',
+      'anything in the workspace. The answer carries the exit code and the output. ' +
+      'Some commands are on an allowlist and run straight away; the rest are put to the user first, ' +
+      'and a few are refused outright. A refusal is a normal answer: say what was refused and why, ' +
+      'and do not try again in another shape.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -740,6 +827,15 @@ async function callTool(name, args) {
     case 'run_command': {
       const command = String(args.command || '').trim();
       if (!command) return '[error] command is required';
+
+      // The refusals are applied here first, so a command that is never
+      // allowed does not even reach the IDE. The IDE applies them again and
+      // asks the user about everything else.
+      const refusal = refuseCommand(command);
+      if (refusal) {
+        trace(`run_command refused: ${command}`);
+        return refusal;
+      }
 
       const timeout = Math.max(1000, Math.min(Number(args.timeout_ms) || 60000, 300000));
       const cwd = args.cwd ? resolveInsideWorkspace(String(args.cwd)) : WORKSPACE;
