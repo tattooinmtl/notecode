@@ -247,5 +247,41 @@
   "workspace": {
     "root": "C:\\NexusOne\\prototypes\\notecode\\workspace",
     "$comment": "llama-server\u0027s working directory. The built-in file tools are scoped to this tree."
+  },
+  "commandPolicy": {
+    "$comment": "What the agent may run without asking. This block is read by the IDE and by runtime/notecode-mcp.mjs, so both agree on what is refused. An allow entry is matched as a prefix of the command words, so \"git status\" also covers \"git status --short\" but not \"git statusx\". A deny entry is a regular expression matched against the whole command: it refuses the command outright and the user is not even asked. Edit either list and the IDE picks it up.",
+    "enabled": true,
+    "askTimeoutSeconds": 120,
+    "allow": [
+      "ls", "dir", "pwd", "echo", "date", "time", "whoami", "hostname",
+      "cat", "type", "head", "tail", "wc", "more",
+      "grep", "rg", "ag", "find", "fd", "tree", "which", "where",
+      "Get-ChildItem", "Get-Content", "Get-Item", "Get-Location", "Get-Date",
+      "Get-Command", "Resolve-Path", "Select-String", "Test-Path", "Measure-Object",
+      "git status", "git diff", "git log", "git show", "git blame", "git ls-files",
+      "git ls-tree", "git rev-parse", "git describe", "git cat-file", "git shortlog",
+      "git reflog", "git tag", "git worktree list", "git branch --list",
+      "git branch -a", "git branch -v", "git remote -v", "git stash list",
+      "git config --get", "git config --list",
+      "dotnet build", "dotnet test", "dotnet run", "dotnet restore",
+      "npm test", "npm run", "npm ls", "npm list",
+      "pnpm test", "pnpm run", "pnpm ls",
+      "yarn test", "yarn run",
+      "pytest", "python -m pytest", "python -m unittest",
+      "cargo build", "cargo test", "cargo check", "cargo clippy",
+      "go build", "go test", "go vet", "go list",
+      "mvn test", "mvn verify", "gradle test", "gradle build",
+      "npx tsc", "npx eslint", "npx vitest", "npx jest"
+    ],
+    "alwaysAllow": [],
+    "deny": [
+      "(?:^|[|;&\\n])\\s*(?:sudo\\s+)?(?:rm|remove-item|del|rmdir|rd)\\b.*?(?:^|[\\s'\"])(?:/|~|\\$HOME|[A-Za-z]:[\\\\/]?)(?:\\s|$)",
+      "(?:^|[|;&\\n])\\s*(?:sudo\\s+)?(?:format|diskpart|mkfs(?:\\.\\w+)?|bcdedit)\\b",
+      "(?:^|[|;&\\n])\\s*(?:sudo\\s+)?(?:vssadmin|wbadmin)\\b.*\\b(?:delete|resize)\\b",
+      "(?:^|[|;&\\n])\\s*(?:sudo\\s+)?cipher\\b.*\\/[wa]\\b",
+      "(?:^|[|;&\\n])\\s*(?:sudo\\s+)?(?:shutdown|restart-computer|stop-computer|halt|poweroff|logoff)\\b",
+      "(?:^|[|;&\\n])\\s*(?:sudo\\s+)?(?:invoke-expression|iex|eval|exec|cscript|wscript|mshta|rundll32|regsvr32)\\b",
+      "(?:^|[|;&\\n])\\s*(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\\b[^|]*\\|\\s*(?:iex|invoke-expression|iwr|irm|powershell|cmd|sh|bash|pwsh|python|node|ruby|perl)\\b"
+    ]
   }
 }
