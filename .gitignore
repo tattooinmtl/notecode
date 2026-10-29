@@ -72,6 +72,9 @@ installer/build/
 installer/output/
 installer/stage/
 installer/payload.zip
+installer/meshy-output/
+installer/meshy-stage/
+installer/meshy-payload.zip
 *.apk
 *.aab
 

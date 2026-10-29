@@ -347,7 +347,8 @@ internal sealed class SystemDoctor
         {
             f.Status = DoctorStatus.Off;
             f.Code = "not-installed";
-            f.Message = $"{title} isn't installed. /install {pack} adds it.";
+            f.Message = $"{title} isn't installed. Get it at {PackUrl(pack)}, run it, then restart notecode.";
+            f.Link = PackUrl(pack);
             return f;
         }
         if (def is null)
@@ -371,15 +372,26 @@ internal sealed class SystemDoctor
             var problem = CheckCommand(cmd);
             if (problem is not null) return Fail(f, problem.Value.Code, problem.Value.Message);
         }
-        foreach (var file in recipe?.Needs?.Files ?? new())
+        // A pack the user set up some other way (a development checkout) has a
+        // config that differs from the recipe; its files are not where the
+        // installer puts them, so it is judged by whether it answers.
+        var customPack = recipe?.Pack is not null && drift is not null;
+        foreach (var file in customPack ? new() : recipe?.Needs?.Files ?? new())
         {
             var path = Expand(file.Path);
             if (File.Exists(path) || Directory.Exists(path)) continue;
+            if (recipe?.Pack is { } missingPack && file == recipe.Needs!.Files[0])
+            {
+                Fail(f, "not-installed",
+                    $"{title} isn't installed on this PC. Get it at {PackUrl(missingPack)}, run it, then restart notecode.");
+                f.Link = PackUrl(missingPack);
+                return f;
+            }
             return Fail(f, "file-missing",
                 $"{title} is missing {file.What} ({path}).", fixes: file.Fix is null ? Array.Empty<string>() : new[] { file.Fix });
         }
 
-        if (recipe?.Key is { } key)
+        if (recipe?.Key is { } key && !customPack)
         {
             var keyFinding = await CheckEnvKeyAsync(f, key, ct);
             if (keyFinding is not null && keyFinding.Status == DoctorStatus.Fail) return keyFinding;
@@ -474,6 +486,10 @@ internal sealed class SystemDoctor
         if (drift is not null) f.Detail = $"Its config differs from the recipe ({drift}), but it works, so it was left alone.";
         return f;
     }
+
+    /// <summary>Where an extra pack's installer is downloaded from.</summary>
+    public static string PackUrl(string pack) =>
+        $"https://notecode.globalwarningnetworks.com/downloads/mcp/{pack}_installer.exe";
 
     private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 
