@@ -122,7 +122,10 @@ internal sealed partial class MainForm
 
                 case "explain":
                     _chat.Log("doctor 2/4: explaining what was found");
-                    foreach (var f in report.Findings.Where(f => f.IsProblem && f.Explanation is null))
+                    // A provider that was never given a key needs no explaining:
+                    // its row says so, and on the local model each explanation is
+                    // a call of its own.
+                    foreach (var f in report.Findings.Where(f => f.IsProblem && f.Code != "no-key" && f.Explanation is null))
                     {
                         f.Explanation = await ExplainFindingAsync(f, ct);
                         report.Save();
@@ -183,7 +186,10 @@ internal sealed partial class MainForm
 
     private static string DoctorClosingNote(DoctorReport report)
     {
-        var problems = report.Findings.Where(f => f.IsProblem).ToList();
+        // The providers that were never given a key are red in the table, but
+        // they are counted apart: they are not set up, rather than broken.
+        var noKey = report.Findings.Where(f => f.Code == "no-key").ToList();
+        var problems = report.Findings.Where(f => f.IsProblem && f.Code != "no-key").ToList();
         var notChecked = report.Findings.Count(f => f.Status == DoctorStatus.Skipped);
         var sb = new StringBuilder();
         sb.AppendLine(problems.Count > 0
@@ -191,6 +197,11 @@ internal sealed partial class MainForm
             : notChecked > 0
                 ? $"**Doctor** - nothing is broken, but {notChecked} thing{(notChecked == 1 ? "" : "s")} couldn't be checked (offline?)."
                 : "**Doctor** - everything checked works.");
+        if (noKey.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"{noKey.Count} provider{(noKey.Count == 1 ? " has" : "s have")} no key - add one with /addprovider <name> to use it.");
+        }
         sb.AppendLine();
         sb.AppendLine(report.Summary());
 
@@ -374,6 +385,7 @@ internal sealed partial class MainForm
         {
             // Skipped is not working: it was not checked, and the model is told so.
             if (!f.IsProblem && f.Status != DoctorStatus.Skipped && only is null) continue;
+            if (f.Code == "no-key" && only is null) continue;
             sb.AppendLine($"{f.Item}: {DoctorReport.Label(f.Status)} - {f.Message}");
             if (f.Link is not null) sb.AppendLine($"  page: {f.Link}");
             if (f.Detail.Length > 0) sb.AppendLine($"  detail: {f.Detail}");
@@ -399,6 +411,9 @@ internal sealed partial class MainForm
         }
 
         var okCount = findings.Count(f => !f.IsProblem && f.Status != DoctorStatus.Skipped);
+        var noKey = findings.Where(f => f.Code == "no-key").Select(f => f.Item).ToList();
+        if (noKey.Count > 0 && only is null)
+            sb.AppendLine($"no key yet (not set up): {string.Join(", ", noKey)}");
         if (sb.Length == 0) return $"Everything checked works ({okCount} items).";
         if (only is null) sb.AppendLine($"{okCount} other items work.");
         return sb.ToString().TrimEnd();

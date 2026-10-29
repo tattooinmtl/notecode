@@ -289,8 +289,8 @@ internal sealed class SystemDoctor
             {
                 if (item is not null && !p.Name.Equals(item, StringComparison.OrdinalIgnoreCase)) continue;
                 var active = _providers.ActiveProvider() == p;
-                // A provider without a key that is not in use is simply not set up.
-                if (!p.HasToken && !active && item is null) continue;
+                // Every provider in the list gets a row, the ones without a key
+                // too: the list is what the user picks from.
                 progress?.Report($"checking the {p.Label} key");
                 findings.Add(await CheckProviderAsync(p, active, ct));
             }
@@ -638,14 +638,38 @@ internal sealed class SystemDoctor
         var keyPage = pages?.KeyPage ?? "";
         var billing = pages?.BillingPage is { Length: > 0 } b ? b : keyPage;
 
+        // A server on this machine (Ollama) needs no key: it is asked whether
+        // it is running.
+        var isLocalHost = host is "localhost" or "127.0.0.1" or "::1" or "[::1]";
+        if (!p.HasToken && isLocalHost)
+        {
+            try
+            {
+                using var resp = await _http.GetAsync(p.ModelsUrl, ct);
+                f.Status = resp.IsSuccessStatusCode ? DoctorStatus.Ok : DoctorStatus.Warn;
+                f.Code = resp.IsSuccessStatusCode ? "ok" : "provider-error";
+                f.Message = resp.IsSuccessStatusCode
+                    ? $"{p.Label} is running (it needs no key)."
+                    : $"{p.Label} is running but answered {(int)resp.StatusCode}.";
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                f.Status = DoctorStatus.Off;
+                f.Code = "not-running";
+                f.Message = $"{p.Label} isn't running on this PC (it needs no key).";
+            }
+            return f;
+        }
+
         if (!p.HasToken)
         {
-            Fail(f, "key-missing",
+            // The active provider without a key is a broken setup; any other is
+            // one the user has not set up, which is red too but counted apart.
+            Fail(f, active ? "key-missing" : "no-key",
                 (active ? $"{p.Label} is the active provider but has no API key." : $"{p.Label} has no API key.") +
                 $" Add one with /addprovider {p.Name}." +
                 (keyPage.Length > 0 ? $" Get a key at {keyPage}" : ""));
             f.Link = keyPage.Length > 0 ? keyPage : null;
-            if (!active) f.Status = DoctorStatus.Warn;
             return f;
         }
 
@@ -689,7 +713,8 @@ internal sealed class SystemDoctor
         {
             "ok" => DoctorStatus.Ok,
             "offline" => DoctorStatus.Skipped,
-            "rate-limited" or "provider-error" or "model-gone" => DoctorStatus.Warn,
+            // The key works, but something else is wrong: orange, not red.
+            "rate-limited" or "provider-error" or "model-gone" or "key-no-credit" => DoctorStatus.Warn,
             _ => DoctorStatus.Fail
         };
         if (f.IsProblem) f.Link = code == "key-no-credit" ? billing : keyPage;
@@ -1240,7 +1265,7 @@ internal sealed class DoctorReport
         sb.AppendLine();
         sb.AppendLine(Summary());
 
-        foreach (var f in Findings.Where(f => f.IsProblem || f.RepairLog.Count > 0))
+        foreach (var f in Findings.Where(f => (f.IsProblem && f.Code != "no-key") || f.RepairLog.Count > 0))
         {
             sb.AppendLine();
             sb.AppendLine($"## {f.Item} ({f.Area}) - {Label(f.Status)}");
@@ -1258,7 +1283,7 @@ internal sealed class DoctorReport
     public string Summary()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("| | Item | Status |");
+        sb.AppendLine("| | Item | Result |");
         sb.AppendLine("|---|---|---|");
         foreach (var f in Findings.OrderBy(f => f.Status switch
                  {
@@ -1270,13 +1295,24 @@ internal sealed class DoctorReport
         return sb.ToString();
     }
 
+    /// <summary>
+    /// The mark in the checks list: green when it works, red when it is broken
+    /// (for a provider: the key was refused or there is none), orange when it
+    /// works but something about it is wrong (a retired model, no credit).
+    /// </summary>
     public static string Icon(DoctorStatus s) => s switch
     {
-        DoctorStatus.Ok => "OK",
-        DoctorStatus.Warn => "WARN",
-        DoctorStatus.Fail => "FAIL",
-        DoctorStatus.Off => "off",
-        _ => "skip"
+        DoctorStatus.Ok => "\u2705",          // green check in a box
+        DoctorStatus.Warn => "\U0001F7E7",    // orange square
+        DoctorStatus.Fail => "\u274C",        // red cross
+        DoctorStatus.Off => "\u2796",         // switched off, not installed
+        _ => "\u2B1C"                         // not checked
+    };
+
+    /// <summary>The same marks as words, for a console that can't show them.</summary>
+    public static string IconText(DoctorStatus s) => s switch
+    {
+        DoctorStatus.Ok => "OK", DoctorStatus.Warn => "WARN", DoctorStatus.Fail => "FAIL", DoctorStatus.Off => "off", _ => "skip"
     };
 
     public static string Label(DoctorStatus s) => s switch

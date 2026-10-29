@@ -202,7 +202,7 @@ if (args[0] is "--system-doctor" or "--system-doctor-badkeys")
 
     foreach (var f in report.Findings)
     {
-        Console.WriteLine($"{DoctorReport.Icon(f.Status),-5} {f.Area,-8} {f.Item,-16} {f.Code,-20} {f.Message}");
+        Console.WriteLine($"{DoctorReport.IconText(f.Status),-5} {f.Area,-8} {f.Item,-16} {f.Code,-20} {f.Message}");
         if (f.Detail.Length > 0) Console.WriteLine($"{"",-32}detail: {f.Detail}");
         if (f.Link is not null) Console.WriteLine($"{"",-32}page:   {f.Link}");
         if (f.Fixes.Count > 0) Console.WriteLine($"{"",-32}fixes:  {string.Join(", ", f.Fixes.Select(x => x + (doctor.FixCommand(f, x) is { } c ? $" [{c}]" : "")))}");
