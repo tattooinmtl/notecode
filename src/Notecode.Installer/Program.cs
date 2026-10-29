@@ -27,6 +27,19 @@ internal static class Program
         var installDir = Installer.DefaultInstallDir;
         if (dirIndex >= 0 && dirIndex + 1 < args.Length) installDir = Path.GetFullPath(args[dirIndex + 1]);
 
+        // The extra packs to install as well, by name: --with rea. In the
+        // window they come ticked; in a silent install they are installed.
+        var packs = new List<Pack>();
+        var withIndex = Array.FindIndex(args, a => a.Equals("--with", StringComparison.OrdinalIgnoreCase));
+        if (withIndex >= 0 && withIndex + 1 < args.Length)
+        {
+            foreach (var name in args[withIndex + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (Packs.Find(name) is { } pack) packs.Add(pack);
+                else Console.Error.WriteLine($"there is no pack called {name}");
+            }
+        }
+
         if (uninstall)
         {
             if (quiet)
@@ -66,10 +79,24 @@ internal static class Program
             // installed into, so the uninstaller finds the same one.
             Installer.RegisterUninstaller(installDir, Version(), Path.GetFileName(installDir.TrimEnd(Path.DirectorySeparatorChar)));
             Console.WriteLine($"notecode installed in {installDir}");
+
+            foreach (var pack in packs)
+            {
+                if (Packs.NodeProblem(pack) is { } problem) Console.Error.WriteLine(problem);
+                try
+                {
+                    Packs.InstallAsync(pack).GetAwaiter().GetResult();
+                    Console.WriteLine($"{pack.Key} installed");
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"{pack.Key} was not installed: {ex.Message}");
+                }
+            }
             return;
         }
 
-        Application.Run(new InstallForm(installDir));
+        Application.Run(new InstallForm(installDir, packs));
     }
 
     private static string Version()
@@ -96,6 +123,7 @@ internal sealed class InstallForm : Form
     private readonly string _installDir;
     private readonly CheckBox _desktop = new() { Checked = true, AutoSize = true };
     private readonly CheckBox _startMenu = new() { Checked = true, AutoSize = true };
+    private readonly List<(Pack Pack, CheckBox Box)> _packs = new();
     private readonly Button _install = new() { Text = "Install", Width = 130, Height = 34 };
     private readonly Button _cancel = new() { Text = "Cancel", Width = 100, Height = 34 };
     private readonly Label _status = new() { AutoSize = false, Height = 20, Dock = DockStyle.Fill };
@@ -103,9 +131,14 @@ internal sealed class InstallForm : Form
     private readonly LinkLabel _where = new() { AutoSize = true, LinkColor = AccentBrightColor, ActiveLinkColor = AccentBrightColor };
     private readonly TableLayoutPanel _root = new();
 
-    public InstallForm(string? installDir = null)
+    public InstallForm(string? installDir = null, IEnumerable<Pack>? ticked = null)
     {
         _installDir = installDir ?? Installer.DefaultInstallDir;
+
+        // The packs are off unless asked for, the same as the [y/N] in install.ps1.
+        var on = new HashSet<string>((ticked ?? []).Select(p => p.Key), StringComparer.OrdinalIgnoreCase);
+        foreach (var pack in Packs.All)
+            _packs.Add((pack, new CheckBox { Checked = on.Contains(pack.Key), AutoSize = true }));
 
         Text = "Install notecode";
         StartPosition = FormStartPosition.CenterScreen;
@@ -115,7 +148,7 @@ internal sealed class InstallForm : Form
         BackColor = CanvasColor;
         ForeColor = ForeColorValue;
         Font = new Font("Segoe UI", 9f);
-        ClientSize = new Size(560, 400);
+        ClientSize = new Size(560, 400 + 30 + 44 * _packs.Count);
 
         BuildLayout();
 
@@ -128,13 +161,14 @@ internal sealed class InstallForm : Form
     {
         _root.Dock = DockStyle.Fill;
         _root.ColumnCount = 1;
-        _root.RowCount = 6;
+        _root.RowCount = 7;
         _root.BackColor = CanvasColor;
         _root.Padding = new Padding(26, 20, 26, 14);
         _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44f));   // title
         _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 98f));   // what
         _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58f));   // options
+        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30f + 44f * _packs.Count));   // packs
         _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 26f));   // where
         _root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));   // status
         _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46f));   // buttons
@@ -181,6 +215,42 @@ internal sealed class InstallForm : Form
         }
         _root.Controls.Add(options, 0, 2);
 
+        // The extra packs. Each is downloaded from the site after the app is
+        // in, so an unticked one costs nothing.
+        var packs = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            BackColor = CanvasColor,
+            WrapContents = false
+        };
+        packs.Controls.Add(new Label
+        {
+            Text = "Extra packs",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            ForeColor = ForeColorValue,
+            BackColor = CanvasColor,
+            Margin = new Padding(0, 4, 0, 6)
+        });
+        foreach (var (pack, box) in _packs)
+        {
+            box.Text = pack.Title;
+            box.ForeColor = ForeColorValue;
+            box.BackColor = CanvasColor;
+            box.Margin = new Padding(0, 0, 0, 0);
+            packs.Controls.Add(box);
+            packs.Controls.Add(new Label
+            {
+                Text = pack.Detail,
+                AutoSize = true,
+                ForeColor = MutedColor,
+                BackColor = CanvasColor,
+                Margin = new Padding(18, 0, 0, 8)
+            });
+        }
+        _root.Controls.Add(packs, 0, 3);
+
         var whereRow = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = CanvasColor, WrapContents = false };
         var whereLabel = new Label
         {
@@ -194,7 +264,7 @@ internal sealed class InstallForm : Form
         _where.Margin = new Padding(0, 0, 0, 0);
         whereRow.Controls.Add(whereLabel);
         whereRow.Controls.Add(_where);
-        _root.Controls.Add(whereRow, 0, 3);
+        _root.Controls.Add(whereRow, 0, 4);
 
         var statusRow = new TableLayoutPanel
         {
@@ -213,7 +283,7 @@ internal sealed class InstallForm : Form
         statusRow.Controls.Add(_status, 0, 0);
         _progress.Margin = new Padding(0, 2, 0, 0);
         statusRow.Controls.Add(_progress, 0, 1);
-        _root.Controls.Add(statusRow, 0, 4);
+        _root.Controls.Add(statusRow, 0, 5);
 
         var buttons = new FlowLayoutPanel
         {
@@ -228,7 +298,7 @@ internal sealed class InstallForm : Form
         _cancel.Margin = new Padding(0, 4, 10, 0);
         buttons.Controls.Add(_install);
         buttons.Controls.Add(_cancel);
-        _root.Controls.Add(buttons, 0, 5);
+        _root.Controls.Add(buttons, 0, 6);
 
         Controls.Add(_root);
     }
@@ -283,10 +353,33 @@ internal sealed class InstallForm : Form
             Installer.CreateShortcuts(_installDir, _desktop.Checked, _startMenu.Checked);
             Installer.RegisterUninstaller(_installDir, Version(), _installDir);
 
+            // The packs come after the app, and one that fails does not undo
+            // it: notecode is installed either way, and /install adds a pack later.
+            foreach (var (_, box) in _packs) box.Enabled = false;
+            var notes = new List<string>();
+            var status = new Progress<string>(m => _status.Text = m);
+            foreach (var (pack, box) in _packs.Where(p => p.Box.Checked))
+            {
+                if (await Task.Run(() => Packs.NodeProblem(pack)) is { } problem) notes.Add(problem);
+                try
+                {
+                    await Packs.InstallAsync(pack, status);
+                }
+                catch (Exception ex)
+                {
+                    notes.Add($"{pack.Key} was not installed: {ex.Message}");
+                }
+            }
+
             _progress.Style = ProgressBarStyle.Blocks;
             _progress.Value = 100;
             _status.ForeColor = GoodColor;
             _status.Text = "notecode is installed.";
+            if (notes.Count > 0)
+            {
+                MessageBox.Show(this, "notecode is installed.\n\n" + string.Join("\n\n", notes),
+                    "notecode", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
 
             var start = new Button { Text = "Start notecode", Width = 140, Height = 34 };
             StyleButton(start, AccentColor, Color.Black);
@@ -299,7 +392,7 @@ internal sealed class InstallForm : Form
             _cancel.Text = "Close";
             _cancel.Enabled = true;
             _cancel.Click += (s, e) => Close();
-            _root.Controls.Add(start, 0, 5);
+            _root.Controls.Add(start, 0, 6);
             start.BringToFront();
         }
         catch (Exception ex)
