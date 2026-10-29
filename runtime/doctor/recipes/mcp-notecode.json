@@ -1,0 +1,19 @@
+{
+  "$comment": "A doctor recipe: the known-good setup of one MCP server. %RUNTIME% is the runtime folder and %ROOT% the folder above it. The doctor compares the live config and the machine against this, offline.",
+  "kind": "mcp",
+  "name": "notecode",
+  "title": "notecode file tools",
+  "summary": "The AI's own file and command tools (notecode_*). Every chat turn uses them, so nothing works without it.",
+  "config": {
+    "transport": "stdio",
+    "command": "node",
+    "args": [ "%RUNTIME%\\notecode-mcp.mjs" ]
+  },
+  "needs": {
+    "commands": [ { "name": "node", "min": "18.0.0", "get": "https://nodejs.org" } ],
+    "files": [ { "path": "%RUNTIME%\\notecode-mcp.mjs", "what": "the server script" } ]
+  },
+  "expect": { "minTools": 8 },
+  "fixes": [ "restore-config", "reconnect" ],
+  "howToUse": "Started by the app. The tools are notecode_read_file, notecode_write_file, notecode_list_files, notecode_run_command and the rest."
+}

@@ -1,0 +1,21 @@
+{
+  "kind": "mcp",
+  "name": "rea",
+  "title": "REA reverse-engineering tools",
+  "pack": "rea",
+  "summary": "170 tools, started only by /rea. It runs through npx, so the first start downloads the package and needs the internet; after that it runs from the npx cache.",
+  "config": {
+    "transport": "stdio",
+    "command": "cmd.exe",
+    "args": [ "/d", "/c", "npx", "-y", "rea-agents@6.4.0", "mcp" ]
+  },
+  "needs": {
+    "commands": [
+      { "name": "node", "min": "22.19.0", "get": "https://nodejs.org" },
+      { "name": "npx", "get": "it comes with Node.js" }
+    ]
+  },
+  "expect": { "minTools": 100 },
+  "fixes": [ "clear-npx-cache", "restore-config" ],
+  "howToUse": "Cloud only: its schemas are 111k tokens, far over the local model's context. Use /rea on a cloud provider."
+}

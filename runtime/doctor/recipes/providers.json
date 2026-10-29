@@ -1,0 +1,22 @@
+{
+  "$comment": "Where to get or fix each cloud provider's API key. The doctor names these pages when a key is missing, refused or out of credit. A provider is matched by name, or by the host of its base URL when it was saved under another name. Checked on 2026-10-30.",
+  "kind": "providers",
+  "pages": {
+    "minimax": { "keyPage": "https://platform.minimax.io/user-center/basic-information/interface-key", "host": "api.minimax.io" },
+    "moonshot": { "keyPage": "https://platform.kimi.ai/console/api-keys", "host": "api.moonshot.ai" },
+    "anthropic": { "keyPage": "https://platform.claude.com/settings/keys", "host": "api.anthropic.com" },
+    "openai": { "keyPage": "https://platform.openai.com/api-keys", "host": "api.openai.com" },
+    "grok": { "keyPage": "https://console.x.ai/", "host": "api.x.ai" },
+    "antigravity": { "keyPage": "https://aistudio.google.com/apikey", "host": "generativelanguage.googleapis.com" },
+    "deepseek": { "keyPage": "https://platform.deepseek.com/api_keys", "host": "api.deepseek.com" },
+    "nvidia": { "keyPage": "https://build.nvidia.com/settings/api-keys", "host": "integrate.api.nvidia.com" },
+    "qwen": { "keyPage": "https://bailian.console.aliyun.com/?tab=model#/api-key", "host": "dashscope.aliyuncs.com" },
+    "openrouter": { "keyPage": "https://openrouter.ai/settings/keys", "host": "openrouter.ai" },
+    "groq": { "keyPage": "https://console.groq.com/keys", "host": "api.groq.com" },
+    "mistral": { "keyPage": "https://console.mistral.ai/api-keys", "host": "api.mistral.ai" },
+    "agnes": { "keyPage": "https://platform.agnes-ai.com/", "host": "apihub.agnes-ai.com" },
+    "xkiro": { "keyPage": "https://xkiro.com/", "host": "api.xkiro.com" },
+    "atria": { "keyPage": "https://atria-asi.ai/", "host": "api.atria-asi.ai" },
+    "reflection": { "keyPage": "https://reflection.ai/", "host": "api.reflection.ai" }
+  }
+}

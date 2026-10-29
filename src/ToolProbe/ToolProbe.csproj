@@ -38,6 +38,10 @@
     <Compile Include="..\Notecode.App\AppPaths.cs" Link="AppPaths.cs" />
     <!-- The job that ends every child process with the app. -->
     <Compile Include="..\Notecode.App\ProcessJob.cs" Link="ProcessJob.cs" />
+    <!-- The system doctor, and the MCP client and config writer it uses. -->
+    <Compile Include="..\Notecode.App\SystemDoctor.cs" Link="SystemDoctor.cs" />
+    <Compile Include="..\Notecode.App\McpHub.cs" Link="McpHub.cs" />
+    <Compile Include="..\Notecode.App\ConfigWriter.cs" Link="ConfigWriter.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 

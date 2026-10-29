@@ -224,8 +224,8 @@ internal static class ProviderPresets
         {
             Name = "minimax", Label = "MiniMax", Source = "preset",
             BaseUrl = "https://api.minimax.io/v1", Style = ApiStyle.OpenAi,
-            Model = "MiniMax-M3.1-Flash", Models = { "MiniMax-M3.1-Flash", "MiniMax-M2", "MiniMax-M2.1" },
-            DoctorNote = "Token Plan and M Plan both work against api.minimax.io/v1"
+            Model = "MiniMax-M3.1-Flash", Models = { "MiniMax-M3.1-Flash", "MiniMax-M3" },
+            DoctorNote = "Token Plan and M Plan both work against api.minimax.io/v1; since October 2026 only M3 and M3.1-Flash are offered, the M2 series is gone"
         },
         new()
         {
