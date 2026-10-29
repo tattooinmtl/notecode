@@ -1,0 +1,17 @@
+{
+  "kind": "mcp",
+  "name": "global-brain",
+  "title": "Global Brain",
+  "summary": "The shared memory of past sessions. brain-system.exe has to be installed, and it is started with --mcp.",
+  "config": {
+    "transport": "stdio",
+    "command": "brain-system.exe",
+    "args": [ "--mcp" ]
+  },
+  "needs": {
+    "commands": [ { "name": "brain-system.exe", "get": "the Brain Skills installer (it goes in %USERPROFILE%\\.brain-skills\\app\\bin)" } ]
+  },
+  "expect": { "minTools": 3 },
+  "fixes": [ "restore-config", "reconnect" ],
+  "howToUse": "brain_project for this folder's past sessions, brain_search for a topic."
+}

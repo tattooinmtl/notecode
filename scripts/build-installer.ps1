@@ -81,6 +81,10 @@ foreach ($name in @('notecode-llama.ps1', 'notecode-mcp.mjs', 'mcp-stdio-bridge.
     if (Test-Path $src) { Copy-Item $src $runtimeOut -Force }
 }
 Copy-Item (Join-Path $root 'runtime\notecode.config.json') $runtimeOut -Force
+# The doctor's recipes and fix scripts: what /doctor compares the machine
+# against, offline.
+$doctorSrc = Join-Path $runtimeSrc 'doctor'
+if (Test-Path $doctorSrc) { Copy-Item $doctorSrc $runtimeOut -Recurse -Force }
 # The img2threejs pipeline /img2threejs runs: forge, grimoire, docs, the job
 # runner and the vendored three.js for the offline viewer.
 $i2tSrc = Join-Path $runtimeSrc 'img2threejs'

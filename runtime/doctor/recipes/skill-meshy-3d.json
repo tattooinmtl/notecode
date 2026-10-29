@@ -1,0 +1,10 @@
+{
+  "kind": "skill",
+  "name": "meshy-3d",
+  "title": "meshy-3d skill",
+  "summary": "Instructions for making 3D models with Meshy. Needs the meshy server, and meshy-dcc to hand models to Blender or Unity.",
+  "path": "%ROOT%\\skills\\meshy-3d\\SKILL.md",
+  "requires": [ "meshy" ],
+  "optional": [ "meshy-dcc" ],
+  "howToUse": "/skill meshy-3d, then describe the model you want."
+}

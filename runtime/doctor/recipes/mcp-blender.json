@@ -1,0 +1,22 @@
+{
+  "kind": "mcp",
+  "name": "blender",
+  "title": "Blender",
+  "summary": "Drives the Blender that is open right now. The server lives inside Blender, so Blender has to be running with its MCP add-on on.",
+  "config": {
+    "transport": "streamable-http",
+    "url": "http://127.0.0.1:8765/mcp"
+  },
+  "app": {
+    "name": "Blender",
+    "process": "blender",
+    "exe": [
+      "%ProgramFiles%\\Blender Foundation\\Blender 5.2\\blender.exe",
+      "%ProgramFiles%\\Blender Foundation\\Blender\\blender.exe"
+    ],
+    "enable": "In Blender, turn on the MCP add-on: Edit > Preferences > Add-ons, find the MCP add-on, tick it, and start its server. It listens on 127.0.0.1:8765."
+  },
+  "expect": { "minTools": 20 },
+  "fixes": [ "start-app", "restore-config", "reconnect" ],
+  "howToUse": "Open Blender first. Then call blender_get_addon_info as the handshake before any other blender_* tool."
+}

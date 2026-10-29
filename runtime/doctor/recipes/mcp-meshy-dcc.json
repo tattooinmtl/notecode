@@ -1,0 +1,19 @@
+{
+  "kind": "mcp",
+  "name": "meshy-dcc",
+  "title": "Meshy DCC gateway",
+  "summary": "Hands Meshy models to the live Blender and Unity. It is served by meshy-dcc-server.exe, which has to be running.",
+  "config": {
+    "transport": "streamable-http",
+    "url": "http://127.0.0.1:19765/mcp"
+  },
+  "app": {
+    "name": "the Meshy DCC gateway",
+    "process": "meshy-dcc-server",
+    "exe": [ "%USERPROFILE%\\.local\\bin\\meshy-dcc-server.exe" ],
+    "enable": "Start meshy-dcc-server.exe (in %USERPROFILE%\\.local\\bin). Blender or the Unity project must also be open for it to find an instance."
+  },
+  "expect": { "minTools": 4 },
+  "fixes": [ "start-app", "restore-config", "reconnect" ],
+  "howToUse": "Four tools: search, describe, load_skill, call. If search finds no instance, Blender or the Unity project is not open."
+}

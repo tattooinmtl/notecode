@@ -19,7 +19,7 @@ namespace Notecode.App;
 /// The terminal is a genuine pseudo console, not a piped shell, so kimi.exe and
 /// friends behave exactly as they would in a standalone terminal window.
 /// </summary>
-internal sealed class MainForm : Form
+internal sealed partial class MainForm : Form
 {
     private readonly AppConfig _cfg;
     private readonly LlamaServer _llama;
@@ -2798,7 +2798,7 @@ capabilities = [ ""tool_use"" ]
         Application.Exit();
     }
 
-    private async Task CmdDoctorAsync(string argument)
+    private async Task CmdEndpointDoctorAsync(string argument)
     {
         var only = argument.Length > 0 ? argument.Trim() : null;
         if (only is not null && _providers.Find(only) is null)
@@ -4156,6 +4156,9 @@ capabilities = [ ""tool_use"" ]
     private async Task<string> InvokeToolGuardedAsync(
         string tool, string argumentsJson, IChatBackend backend, CancellationToken ct)
     {
+        // The doctor is the app's own tool, on every backend.
+        if (tool == DoctorToolSpec.Name) return await RunDoctorToolAsync(argumentsJson, ct);
+
         if (!IsServerShellTool(tool))
             return await backend.InvokeToolAsync(tool, argumentsJson, ct);
 
@@ -4549,6 +4552,11 @@ capabilities = [ ""tool_use"" ]
             }
             baseSpecs = _byokToolSpecs;
         }
+
+        // The doctor is offered on every turn: it is one small schema, and "why
+        // doesn't X work" is exactly the question the local model can't answer
+        // on its own.
+        baseSpecs = baseSpecs.Append(DoctorToolSpec).ToList();
 
         if (!includeRea) return baseSpecs;
 

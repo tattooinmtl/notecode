@@ -36,6 +36,10 @@
     <Compile Include="..\Notecode.App\HardwareScanner.cs" Link="HardwareScanner.cs" />
     <!-- Where the user data lives. HardwareProfile refers to it. -->
     <Compile Include="..\Notecode.App\AppPaths.cs" Link="AppPaths.cs" />
+    <!-- The system doctor, and the MCP client and config writer it uses. -->
+    <Compile Include="..\Notecode.App\SystemDoctor.cs" Link="SystemDoctor.cs" />
+    <Compile Include="..\Notecode.App\McpHub.cs" Link="McpHub.cs" />
+    <Compile Include="..\Notecode.App\ConfigWriter.cs" Link="ConfigWriter.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 
