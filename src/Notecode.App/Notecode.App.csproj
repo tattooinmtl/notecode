@@ -18,10 +18,10 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
-    <Version>1.2.0</Version>
-    <FileVersion>1.2.0.0</FileVersion>
-    <AssemblyVersion>1.2.0.0</AssemblyVersion>
-    <InformationalVersion>1.2.0</InformationalVersion>
+    <Version>1.3.0</Version>
+    <FileVersion>1.3.0.0</FileVersion>
+    <AssemblyVersion>1.3.0.0</AssemblyVersion>
+    <InformationalVersion>1.3.0</InformationalVersion>
     <Company>notecode</Company>
     <Product>notecode</Product>
     <Description>A dual-pane IDE over a local llama.cpp runtime.</Description>
