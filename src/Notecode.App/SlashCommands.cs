@@ -276,27 +276,43 @@ internal static class SlashCommands
 
         new(
             "doctor",
-            "Check and refresh the endpoints over the web",
-            "/doctor [provider]",
+            "Check and repair the MCP servers, skills, keys and local model",
+            "/doctor [mcp|skills|keys|local|<name>|new|status|endpoints]",
             """
-            **/doctor** - the endpoint doctor.
+            **/doctor** - the system doctor. It works offline, on the local model.
 
             ```
-            /doctor
-            /doctor minimax
+            /doctor                  everything, or carry on with an unfinished run
+            /doctor mcp              the MCP servers
+            /doctor skills           the skills, and the servers they need
+            /doctor keys             the cloud providers' API keys
+            /doctor local            the local model server
+            /doctor blender          one server, skill or provider by name
+            /doctor new              start again instead of carrying on
+            /doctor status           what the last run found
+            /doctor endpoints [p]    the web check of the provider endpoints
             ```
 
-            With no argument it checks every provider. For each one it:
+            It runs in four phases, and writes `doctor.md` (in the notecode data
+            folder) after every item, so a stopped run carries on where it was:
 
-            1. asks the configured endpoint for its model list, using your token;
-            2. searches the web for the provider's current base URL and model names,
-               so a moved endpoint or a new model is noticed;
-            3. reports what it found, and offers the change when the endpoint moved.
+            1. **scan** - code checks each item against its recipe in
+               `runtime/doctor/recipes`: is the program installed, are the files
+               there, is the key there and accepted, is the app it lives in open,
+               does the server answer;
+            2. **explain** - the model explains each problem, one at a time;
+            3. **repair** - each fix is shown, and runs only when you approve it;
+            4. **verify** - what was repaired is checked again.
 
-            The doctor uses the private GWN search gateway, so it works without a public
-            search key. The Add Provider form has the same thing as a button.
+            It says plainly when you have to act: an app to open (Blender, the
+            Meshy gateway), or an API key that is missing, refused or out of
+            credit, with the provider's key page. Offline, it says so instead of
+            blaming the key.
+
+            The model can call it too: ask "why doesn't blender work?" or "repair
+            the mcp servers".
             """,
-            new[] { "check", "endpoints" }),
+            new[] { "check", "repair", "fix" }),
 
         new(
             "skills",

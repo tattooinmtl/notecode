@@ -1,0 +1,9 @@
+{
+  "kind": "skill",
+  "name": "blender-scene",
+  "title": "blender-scene skill",
+  "summary": "Instructions for driving Blender. It only works when the blender server works.",
+  "path": "%ROOT%\\skills\\blender-scene\\SKILL.md",
+  "requires": [ "blender" ],
+  "howToUse": "/skill blender-scene, then ask about the open scene."
+}

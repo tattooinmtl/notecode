@@ -158,7 +158,8 @@ takes the keyboard focus — the prompt keeps it, so typing keeps working.
 | `/provider [name]` | show or switch the provider |
 | `/providers` | list every configured provider |
 | `/addprovider [name]` | add or edit a provider by hand |
-| `/doctor [provider]` | check and refresh the endpoints over the web |
+| `/doctor [mcp\|skills\|keys\|local\|<name>]` | check and repair the MCP servers, skills, API keys and local model, offline |
+| `/doctor endpoints [provider]` | check and refresh the provider endpoints over the web |
 | `/skills` | list the skills on this machine |
 | `/skill <name>` | load a skill into the conversation |
 | `/addskills [file.md]` | add a skill and repair it so it works here |
@@ -518,6 +519,60 @@ node .\scripts\rea-meshy-probe.mjs     # REA over the bundle, diffed against the
 
 The findings of that second command are written up in `docs/rea-meshy-findings.md`.
 
+## The doctor
+
+`/doctor` checks that everything notecode depends on works, and repairs what it can.
+It is built for the case where the local model is the only model there is: no
+internet, 12k tokens of context. So the checking is done by code, not by the
+model.
+
+```
+/doctor                  everything, or carry on with an unfinished run
+/doctor mcp              the MCP servers
+/doctor skills           the skills, and the servers they need
+/doctor keys             the cloud providers' API keys
+/doctor blender          one server, skill or provider by name
+/doctor new              start again
+/doctor status           what the last run found
+```
+
+**Recipes.** Each MCP server and skill has a recipe in `runtime/doctor/recipes/`: the
+known-good config, what it needs on the machine (a program and its version, files, an
+API key in a `.env`), the program it lives in when it lives in one (Blender, the Meshy
+DCC gateway), and the fixes that apply. `providers.json` there holds each provider's
+API-key page. A recipe is written while online and read while offline, so the model
+never has to know how a server is meant to be connected. Adding a server means adding
+its recipe.
+
+**Four phases**, each written to `doctor.md` in the notecode data folder after every
+item, so a run that stops carries on where it was:
+
+1. **scan** - code checks each item against its recipe;
+2. **explain** - the model explains each problem in a few sentences, one at a time,
+   from a prompt of a few hundred tokens;
+3. **repair** - each fix is shown in the approval window and runs only on a yes;
+4. **verify** - what was repaired is checked again.
+
+**What it tells you**, among others:
+
+| It finds | It says |
+|---|---|
+| Blender not running | Blender isn't open, and offers to start it |
+| Blender open, port 8765 closed | the MCP add-on isn't on, and where to switch it on |
+| no key in the `.env` | which variable in which file, and the provider's key page |
+| key refused (401/403) | the key was refused, and the key page to make a new one |
+| out of credit (402) | the key works but the account is empty, and where to top up |
+| the model was retired | the key works but the model is gone; pick another |
+| no network | you're offline - not a key problem |
+| config differs and fails | puts the config back to the recipe |
+
+The fixes are small scripts in `runtime/doctor/fixes/` (`start-app`, `reinstall-npm`,
+`clear-npx-cache`) and three things the app does itself (`restore-config`, `reconnect`,
+`start-llama`). The model never writes a command.
+
+The model can run the doctor too: `notecode_doctor` is offered on every turn, so "why
+doesn't blender work?" or "repair the mcp servers" is answered by calling it.
+
 ---
 
 ## Accessibility
@@ -589,7 +644,7 @@ xKiro, Atria ASI and Reflection AI.
 | `/addprovider` | the form: name, base URL, bearer token, API style, models |
 | **Scan GGUF** | reads the chat template straight out of a `.gguf` header |
 | **Auto update endpoints** | runs the doctor for this provider |
-| `/doctor` | the same check for every provider |
+| `/doctor endpoints` | the same check for every provider |
 
 **The endpoint doctor** does two things per provider: it asks the endpoint for its model
 list with your token, and it searches the web for the provider's current base URL and

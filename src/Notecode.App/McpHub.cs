@@ -171,6 +171,34 @@ internal sealed class McpHub : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Starts a server, reads its catalogue and stops it again, without keeping
+    /// it. This is the doctor's handshake: it says whether the server works
+    /// without changing what the app is connected to.
+    /// </summary>
+    /// <returns>the number of tools, or the reason it did not answer.</returns>
+    public static async Task<(int Tools, string? Error)> ProbeAsync(
+        string name, McpServerDef def, TimeSpan timeout, CancellationToken ct = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+        try
+        {
+            var (conn, tools) = await OpenAsync(name, def, cts.Token).ConfigureAwait(false);
+            if (conn is null) return (0, $"unknown transport '{def.Transport}'");
+            await conn.DisposeAsync().ConfigureAwait(false);
+            return (tools.Count, null);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return (0, $"no answer within {timeout.TotalSeconds:N0} seconds");
+        }
+        catch (Exception e)
+        {
+            return (0, e.Message);
+        }
+    }
+
     /// <summary>Keeps a connection that answered, and stops the one it replaces.</summary>
     private async Task RegisterAsync(string name, IMcpConnection conn)
     {

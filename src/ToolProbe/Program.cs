@@ -33,6 +33,180 @@ if (args[0] == "--dump-modes")
     return 0;
 }
 
+// Whether the local model reaches for notecode_doctor when it is asked a plain
+// question about the setup. It gets the everyday chat tools plus the doctor, the
+// way a turn does, and the probe prints which tool it called. llama-server has to
+// be running.
+//
+//   ToolProbe --doctor-toolcall <configPath> "<question>"
+if (args[0] == "--doctor-toolcall")
+{
+    var tcfg = AppConfig.Load(args[1]);
+    var tllama = new LlamaServer(tcfg);
+    var dtools = await tllama.GetToolsAsync(includeRea: false);
+    var chat = tcfg.Llama.Agent.ChatTools;
+    if (chat.Count > 0) dtools = chat.Select(n => dtools.FirstOrDefault(t => t.Name == n)).OfType<ToolSpec>().ToList();
+    dtools.Add(SystemDoctor.ToolSpec);
+
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    var turn = await tllama.StreamChatTurnAsync(
+        new List<ChatMessage>
+        {
+            new("system", "You are notecode's assistant. Use the tools when they answer the question."),
+            new("user", args[2])
+        },
+        dtools, null, temperature: 0.2, maxTokens: 400);
+    Console.WriteLine($"{dtools.Count} tools offered, {clock.Elapsed.TotalSeconds:N0} s");
+    Console.WriteLine(turn.ToolCalls.Count == 0
+        ? $"no tool call. said: {turn.Content.Trim()}"
+        : string.Join("\n", turn.ToolCalls.Select(c => $"called {c.Name} {c.ArgumentsJson}")));
+    return turn.ToolCalls.Any(c => c.Name == SystemDoctor.ToolSpec.Name) ? 0 : 1;
+}
+
+// The explain phase on the local model: the real findings for the given scope,
+// each explained with the prompt the app sends. llama-server is started if it is
+// not up, and stopped again afterwards if the probe started it.
+//
+//   ToolProbe --doctor-explain <configPath> [scope]
+if (args[0] == "--doctor-explain")
+{
+    var ecfg = AppConfig.Load(args[1]);
+    await using var ehub = new McpHub();
+    var ellama = new LlamaServer(ecfg);
+    var edoctor = new SystemDoctor(ecfg, ProviderStore.Load(ecfg.RuntimeDir), ehub, ct => ellama.IsHealthyAsync(ct));
+    var escope = edoctor.ResolveScope(args.Length > 2 ? args[2] : "") ?? ("all", null);
+    var problems = (await edoctor.ScanAsync(escope.Area, escope.Item, null, CancellationToken.None))
+        .Where(f => f.IsProblem && f.Area != "local").ToList();
+
+    var started = false;
+    if (!await ellama.IsHealthyAsync())
+    {
+        Console.WriteLine("starting llama-server...");
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        // StartAsync only returns when the server exits (the server holds the
+        // wrapper's output open), so /health is watched instead.
+        _ = ellama.StartAsync();
+        var up = false;
+        for (var i = 0; i < 150 && !up; i++) { await Task.Delay(2000); up = await ellama.IsHealthyAsync(); }
+        if (!up) { Console.WriteLine("llama-server did not start"); return 1; }
+        started = true;
+        Console.WriteLine($"llama-server up in {clock.Elapsed.TotalSeconds:N0} s");
+    }
+    try
+    {
+        foreach (var f in problems)
+        {
+            var emsgs = edoctor.ExplainPrompt(f);
+            var promptChars = emsgs.Sum(m => m.Content.Length);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var turn = await ellama.StreamChatTurnAsync(emsgs, null, null, temperature: 0.2, maxTokens: 700);
+            Console.WriteLine($"\n== {f.Item} [{f.Code}]  prompt ~{promptChars / 4} tokens, {clock.Elapsed.TotalSeconds:N0} s");
+            Console.WriteLine(turn.Content.Trim().Length > 0 ? turn.Content.Trim() : "(empty - the doctor's own message is used)");
+        }
+    }
+    finally
+    {
+        if (started) await ellama.StopAsync();
+    }
+    return 0;
+}
+
+// A doctor fix, run the way the app runs it.
+//
+//   ToolProbe --doctor-fix "<command>"
+if (args[0] == "--doctor-fix")
+{
+    var (fixCode, verdict) = await SystemDoctor.RunFixScriptAsync(args[1], CancellationToken.None);
+    Console.WriteLine($"exit {fixCode}: {verdict}");
+    return 0;
+}
+
+// restore-config on a config: the server's block is put back to its recipe.
+// Run it on a copy - it writes the file.
+//
+//   ToolProbe --doctor-restore <configCopyPath> <server>
+if (args[0] == "--doctor-restore")
+{
+    var rcfg = AppConfig.Load(args[1]);
+    await using var rhub = new McpHub();
+    var rdoctor = new SystemDoctor(rcfg, ProviderStore.Load(rcfg.RuntimeDir), rhub, _ => Task.FromResult(false));
+    Console.WriteLine(rdoctor.RestoreConfig(args[2]));
+    var reread = AppConfig.Load(args[1]);
+    var def = reread.Mcp.Servers.GetValueOrDefault(args[2]);
+    Console.WriteLine(def is null
+        ? "the server is still not in the config"
+        : $"now: {def.Transport} {def.Command} {string.Join(" ", def.Args)} {def.Url} enabled={def.Enabled}");
+    return 0;
+}
+
+// The system doctor's scan, headless: the same checks /doctor runs, against the
+// real config and this machine. The report goes where it is told, so a test does
+// not overwrite the user's doctor.md.
+//
+//   ToolProbe --system-doctor <configPath> <reportPath> [scope]
+//   ToolProbe --system-doctor-badkeys <configPath> <reportPath>
+//
+// The second form swaps every provider for a copy holding a made-up key, plus one
+// whose host does not exist, to check what the doctor says about a refused key
+// and about no network. The real keys are not used, and nothing is saved.
+if (args[0] is "--system-doctor" or "--system-doctor-badkeys")
+{
+    var dcfg = AppConfig.Load(args[1]);
+    var store = ProviderStore.Load(dcfg.RuntimeDir);
+    if (args[0] == "--system-doctor-badkeys")
+    {
+        var fake = SecretBox.Protect("sk-notecode-doctor-test-0000000000000000");
+        var picks = new[] { "minimax", "openai", "anthropic", "nvidia", "groq", "deepseek" };
+        store = new ProviderStore
+        {
+            Active = "local",
+            Providers = store.Providers.Where(p => p.IsLocal || picks.Contains(p.Name)).Select(p =>
+            {
+                var c = p.Clone();
+                if (!c.IsLocal) c.ProtectedToken = fake;
+                // Saved under another name, the way minimax.io is here: the key page
+                // has to be found by the host instead.
+                if (c.Name == "minimax") c.Name = "minimax.io";
+                return c;
+            }).ToList()
+        };
+        store.Providers.Add(new ProviderDef
+        {
+            Name = "nowhere", Label = "Nowhere", BaseUrl = "https://api.notecode-doctor-offline.invalid/v1", ProtectedToken = fake
+        });
+        args = new[] { args[0], args[1], args[2], "keys" };
+    }
+    await using var hub = new McpHub();
+    var dllama = new LlamaServer(dcfg);
+    var doctor = new SystemDoctor(dcfg, store, hub, ct => dllama.IsHealthyAsync(ct));
+    Console.WriteLine($"recipes    {doctor.Recipes.Count} ({string.Join(", ", doctor.Recipes.Select(r => r.Kind + ":" + r.Name))})");
+
+    var scopeText = args.Length > 3 ? args[3] : "";
+    var scope = doctor.ResolveScope(scopeText);
+    if (scope is null) { Console.WriteLine($"unknown scope {scopeText}"); return 1; }
+
+    var report = DoctorReport.New(scopeText.Length == 0 ? "all" : scopeText, args[2]);
+    report.Findings = await doctor.ScanAsync(scope.Value.Area, scope.Value.Item,
+        new Progress<string>(s => Console.WriteLine($"  .. {s}")), CancellationToken.None);
+    report.Advance();
+    report.Save();
+
+    foreach (var f in report.Findings)
+    {
+        Console.WriteLine($"{DoctorReport.Icon(f.Status),-5} {f.Area,-8} {f.Item,-16} {f.Code,-20} {f.Message}");
+        if (f.Detail.Length > 0) Console.WriteLine($"{"",-32}detail: {f.Detail}");
+        if (f.Link is not null) Console.WriteLine($"{"",-32}page:   {f.Link}");
+        if (f.Fixes.Count > 0) Console.WriteLine($"{"",-32}fixes:  {string.Join(", ", f.Fixes.Select(x => x + (doctor.FixCommand(f, x) is { } c ? $" [{c}]" : "")))}");
+    }
+
+    // The resume path: the report read back has to be the report written.
+    var back = DoctorReport.Load(args[2]);
+    var same = back is not null && back.Phase == "explain" && back.Findings.Count == report.Findings.Count &&
+               back.Findings.Select(f => f.Key + f.Code).SequenceEqual(report.Findings.Select(f => f.Key + f.Code));
+    Console.WriteLine($"resume     {(same ? "ok - doctor.md reads back with the same findings, phase explain" : "FAILED")}");
+    return same ? 0 : 1;
+}
+
 // Hardware scan. The splash screen runs this before the app opens, so it is
 // verified headlessly here: the numbers it prints are the ones that decide which
 // llama.cpp build runs on this machine.
