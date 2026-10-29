@@ -21,9 +21,9 @@
 
     <!-- The version is stamped in by the build script, so the installer and
          the app it installs always agree. -->
-    <Version>1.2.0</Version>
-    <FileVersion>1.2.0.0</FileVersion>
-    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+    <Version>1.3.0</Version>
+    <FileVersion>1.3.0.0</FileVersion>
+    <AssemblyVersion>1.3.0.0</AssemblyVersion>
     <Product>notecode</Product>
     <Company>notecode</Company>
     <Description>Installs notecode, the local-model IDE.</Description>
