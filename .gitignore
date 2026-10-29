@@ -75,6 +75,20 @@ installer/payload.zip
 installer/meshy-output/
 installer/meshy-stage/
 installer/meshy-payload.zip
+installer/rea-output/
+installer/rea-stage/
+installer/rea-payload.zip
+
+# ------------------------------------------------- the extra pack installers
+# rea_installer.exe and meshy_installer.exe are published on the website
+# (downloads/mcp), not on GitHub, and their source stays on the build machine.
+# The app only knows where to download them from.
+REA_MCP/
+MESHY_MCP/
+src/Notecode.ReaInstaller/
+src/Notecode.MeshyInstaller/
+scripts/build-rea-installer.ps1
+scripts/build-meshy-installer.ps1
 *.apk
 *.aab
 
