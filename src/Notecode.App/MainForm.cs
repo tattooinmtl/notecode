@@ -2582,7 +2582,8 @@ capabilities = [ ""tool_use"" ]
 
         if (open && File.Exists(viewer))
         {
-            try { Process.Start(new ProcessStartInfo(viewer) { UseShellExecute = true }); }
+            // The browser is the user's, not the app's: it stays open after notecode exits.
+            try { ProcessJob.OpenOutside(viewer); }
             catch (Exception ex) { AppLog.Warn($"the viewer could not be opened: {ex.Message}"); }
         }
 
@@ -2775,14 +2776,9 @@ capabilities = [ ""tool_use"" ]
         SingleInstance.Current?.Release();
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = exe,
-                UseShellExecute = false,
-                WorkingDirectory = Environment.CurrentDirectory
-            };
-            foreach (var a in args) psi.ArgumentList.Add(a);
-            System.Diagnostics.Process.Start(psi);
+            // Outside the job: the job ends with this copy, and the new copy
+            // has to outlive it.
+            ProcessJob.StartOutside(exe, args, Environment.CurrentDirectory);
         }
         catch (Exception ex)
         {
@@ -4683,7 +4679,7 @@ capabilities = [ ""tool_use"" ]
         catch { }
     }
 
-    protected override async void OnFormClosing(FormClosingEventArgs e)
+    protected override void OnFormClosing(FormClosingEventArgs e)
     {
         AppLog.Write("window", $"closing, reason={e.CloseReason}, reallyExit={_reallyExit}");
 
@@ -4726,7 +4722,14 @@ capabilities = [ ""tool_use"" ]
         _tray?.Dispose();
         _trayMenu?.Dispose();
         _shell?.Dispose();
-        await _mcp.DisposeAsync();
+
+        // The MCP servers are stopped before the close goes on. This used to be
+        // an await in an async void handler, which hands control back to
+        // WinForms, so the process could end before the servers were stopped.
+        // The job (ProcessJob) ends whatever is left either way; this is the
+        // polite stop that comes first.
+        try { _mcp.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5)); }
+        catch (Exception ex) { AppLog.Warn($"the MCP servers did not stop cleanly: {ex.Message}"); }
         _llama.Dispose();
         base.OnFormClosing(e);
     }

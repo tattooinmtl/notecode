@@ -33,6 +33,39 @@ if (args[0] == "--dump-modes")
     return 0;
 }
 
+// The job that ends the app's child processes with it. The probe joins the job
+// the way the app does (or not, with --no-job), starts llama-server through the
+// real wrapper, prints its pid once it answers, and then waits to be killed. The
+// test kills this process alone and checks whether llama-server went with it.
+//
+//   ToolProbe --job-test <configPath> [--no-job]
+//   ToolProbe --job-outside <exe>
+//
+// The second form joins the job and starts a program with StartOutside, the way
+// the app opens the viewer and restarts itself: that one has to survive.
+if (args[0] == "--job-outside")
+{
+    ProcessJob.AdoptCurrentProcess();
+    ProcessJob.StartOutside(args[1], Array.Empty<string>());
+    Console.WriteLine("started outside the job");
+    await Task.Delay(Timeout.Infinite);
+    return 0;
+}
+if (args[0] == "--job-test")
+{
+    if (!args.Contains("--no-job")) ProcessJob.AdoptCurrentProcess();
+    Console.WriteLine($"in job: {ProcessJob.Active}");
+    var jcfg = AppConfig.Load(args[1]);
+    var jllama = new LlamaServer(jcfg);
+    // StartAsync returns only when the server exits, so /health is watched.
+    _ = jllama.StartAsync();
+    for (var i = 0; i < 120 && !await jllama.IsHealthyAsync(); i++) await Task.Delay(1000);
+    var pids = System.Diagnostics.Process.GetProcessesByName("llama-server").Select(p => p.Id);
+    Console.WriteLine($"llama-server up: {string.Join(",", pids)}");
+    await Task.Delay(Timeout.Infinite);
+    return 0;
+}
+
 // Whether the local model reaches for notecode_doctor when it is asked a plain
 // question about the setup. It gets the everyday chat tools plus the doctor, the
 // way a turn does, and the probe prints which tool it called. llama-server has to

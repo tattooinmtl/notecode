@@ -140,8 +140,35 @@ internal sealed class LlamaServer : IChatBackend, IDisposable
     public async Task<bool> StartAsync(int? ctx = null, int? threads = null, CancellationToken ct = default)
     {
         if (await IsHealthyAsync(ct).ConfigureAwait(false)) return true;
-        var (code, output) = await RunWrapperAsync("start", ctx, threads, ct).ConfigureAwait(false);
+
+        // The wrapper starts llama-server with Start-Process, which takes it out
+        // of the app's job, so it would outlive the app. The wrapper writes the
+        // server's pid to llama-server.pid; the new pid is put back in the job.
+        var pidFile = Path.Combine(_cfg.RuntimeDir, "llama-server.pid");
+        var before = File.Exists(pidFile) ? File.GetLastWriteTimeUtc(pidFile) : DateTime.MinValue;
+        var run = RunWrapperAsync("start", ctx, threads, ct);
+        _ = AdoptServerWhenStartedAsync(pidFile, before, run);
+
+        var (code, output) = await run.ConfigureAwait(false);
         return code == 0 && await IsHealthyAsync(ct).ConfigureAwait(false);
+    }
+
+    private static async Task AdoptServerWhenStartedAsync(string pidFile, DateTime before, Task run)
+    {
+        for (var i = 0; i < 600 && !run.IsCompleted; i++)
+        {
+            try
+            {
+                if (File.Exists(pidFile) && File.GetLastWriteTimeUtc(pidFile) > before &&
+                    int.TryParse(File.ReadAllText(pidFile).Trim(), out var pid))
+                {
+                    ProcessJob.Adopt(pid);
+                    return;
+                }
+            }
+            catch (IOException) { /* the wrapper is still writing it */ }
+            await Task.Delay(500).ConfigureAwait(false);
+        }
     }
 
     public async Task StopAsync(CancellationToken ct = default)
