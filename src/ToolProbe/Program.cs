@@ -118,7 +118,7 @@ if (args[0] == "--doctor-fix")
 {
     var (fixCode, verdict) = await SystemDoctor.RunFixScriptAsync(args[1], CancellationToken.None);
     Console.WriteLine($"exit {fixCode}: {verdict}");
-    return 0;
+    return fixCode == 0 ? 0 : 1;
 }
 
 // restore-config on a config: the server's block is put back to its recipe.
@@ -136,7 +136,16 @@ if (args[0] == "--doctor-restore")
     Console.WriteLine(def is null
         ? "the server is still not in the config"
         : $"now: {def.Transport} {def.Command} {string.Join(" ", def.Args)} {def.Url} enabled={def.Enabled}");
-    return 0;
+
+    // The file on disk has to match the recipe now, not just say it was written.
+    var want = rdoctor.Recipe("mcp", args[2])?.Config is { } rc ? rdoctor.Expanded(rc) : null;
+    var matches = def is not null && want is not null && def.Enabled &&
+                  string.Equals(def.Transport, want.Transport, StringComparison.OrdinalIgnoreCase) &&
+                  string.Equals(def.Url ?? "", want.Url ?? "", StringComparison.OrdinalIgnoreCase) &&
+                  string.Equals(def.Command ?? "", want.Command ?? "", StringComparison.OrdinalIgnoreCase) &&
+                  def.Args.SequenceEqual(want.Args, StringComparer.OrdinalIgnoreCase);
+    Console.WriteLine(matches ? "restore    ok - the config matches the recipe" : "restore    FAILED - the config does not match the recipe");
+    return matches ? 0 : 1;
 }
 
 // The system doctor's scan, headless: the same checks /doctor runs, against the
@@ -204,7 +213,24 @@ if (args[0] is "--system-doctor" or "--system-doctor-badkeys")
     var same = back is not null && back.Phase == "explain" && back.Findings.Count == report.Findings.Count &&
                back.Findings.Select(f => f.Key + f.Code).SequenceEqual(report.Findings.Select(f => f.Key + f.Code));
     Console.WriteLine($"resume     {(same ? "ok - doctor.md reads back with the same findings, phase explain" : "FAILED")}");
-    return same ? 0 : 1;
+
+    // With made-up keys every real provider has to be refused, and the host that
+    // does not exist has to be reported as offline - not as a bad key.
+    var expected = true;
+    if (args[0] == "--system-doctor-badkeys")
+    {
+        foreach (var f in report.Findings.Where(f => f.Area == "provider"))
+        {
+            var want = f.Item == "nowhere" ? "offline" : "key-rejected";
+            var ok = f.Code == want;
+            expected &= ok;
+            Console.WriteLine($"expect     {f.Item,-12} {want,-14} {(ok ? "ok" : $"FAILED - got {f.Code}")}");
+        }
+        var nowhere = report.Findings.Any(f => f.Item == "nowhere");
+        expected &= nowhere && report.Findings.Count(f => f.Area == "provider") >= 2;
+        if (!nowhere) Console.WriteLine("expect     nowhere        FAILED - the unreachable provider is missing");
+    }
+    return same && expected ? 0 : 1;
 }
 
 // Hardware scan. The splash screen runs this before the app opens, so it is

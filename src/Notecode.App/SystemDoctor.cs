@@ -530,14 +530,19 @@ internal sealed class SystemDoctor
         var exts = System.IO.Path.HasExtension(name)
             ? new[] { "" }
             : (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT").Split(';');
-        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+        foreach (var raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
         {
-            if (dir.Length == 0) continue;
+            // A relative entry (".", or a bare folder name) resolves against the
+            // current folder, which is how a planted node.exe gets picked up. The
+            // doctor runs what it finds to read its version, so only absolute
+            // folders count.
+            var dir = raw.Trim().Trim('"');
+            if (dir.Length == 0 || !System.IO.Path.IsPathFullyQualified(dir)) continue;
             foreach (var ext in exts)
             {
                 try
                 {
-                    var p = System.IO.Path.Combine(dir.Trim('"'), name + ext);
+                    var p = System.IO.Path.Combine(dir, name + ext);
                     if (File.Exists(p)) return p;
                 }
                 catch { }
@@ -824,12 +829,29 @@ internal sealed class SystemDoctor
         {
             if (item is not null && !recipe.Name.Equals(item, StringComparison.OrdinalIgnoreCase)) continue;
             var f = new DoctorFinding { Area = "skill", Item = recipe.Name };
-            var path = recipe.Path is null ? "" : Expand(recipe.Path);
-            if (!File.Exists(path))
+
+            // The copy that counts is the one /skill loads: the first one in the
+            // skill folders. The recipe's path is where a copy comes from.
+            var loaded = FindSkillFolders().FirstOrDefault(s =>
+                s.Name.Equals(recipe.Name, StringComparison.OrdinalIgnoreCase) && File.Exists(s.File));
+            if (loaded is null)
             {
-                findings.Add(Fail(f, "skill-missing", $"The {recipe.Name} skill file isn't there ({path})."));
+                var source = recipe.Path is null ? "" : Expand(recipe.Path);
+                var roots = string.Join(", ", _cfg.Skills.Roots.Select(Expand));
+                if (File.Exists(source))
+                {
+                    Fail(f, "skill-not-installed",
+                        $"The {recipe.Name} skill isn't in a skill folder, so /skill can't load it.", "install-skill");
+                    f.Detail = $"A copy is at {source}. The skill folders are {roots}.";
+                }
+                else
+                {
+                    Fail(f, "skill-missing", $"The {recipe.Name} skill isn't in any skill folder ({roots}).");
+                }
+                findings.Add(f);
                 continue;
             }
+            var path = loaded.File;
             var front = FrontMatterProblem(File.ReadAllText(path));
             if (front is not null)
             {
@@ -844,8 +866,21 @@ internal sealed class SystemDoctor
                     $"The {recipe.Name} skill can't work until the {down.Item} server works: {down.Message}"));
                 continue;
             }
+
+            // A server that answers but is not connected, or lists too few tools,
+            // is not down - but the skill can't count on it either.
+            var degraded = servers.FirstOrDefault(s =>
+                recipe.Requires.Contains(s.Item, StringComparer.OrdinalIgnoreCase) && s.Status == DoctorStatus.Warn);
+            if (degraded is not null)
+            {
+                f.Status = DoctorStatus.Warn;
+                f.Code = "server-degraded";
+                f.Message = $"The {recipe.Name} skill may not work yet: {degraded.Message}";
+                findings.Add(f);
+                continue;
+            }
             var optional = servers.FirstOrDefault(s =>
-                recipe.Optional.Contains(s.Item, StringComparer.OrdinalIgnoreCase) && s.Status is DoctorStatus.Fail or DoctorStatus.Off);
+                recipe.Optional.Contains(s.Item, StringComparer.OrdinalIgnoreCase) && s.Status is DoctorStatus.Fail or DoctorStatus.Off or DoctorStatus.Warn);
             f.Status = optional is null ? DoctorStatus.Ok : DoctorStatus.Warn;
             f.Code = optional is null ? "ok" : "optional-server-down";
             f.Message = optional is null
@@ -986,8 +1021,31 @@ internal sealed class SystemDoctor
             "reinstall-npm" => $"Reinstall the {f.Item} server's Node packages and rebuild it (npm needs the internet unless its cache has them).",
             "clear-npx-cache" => "Empty npx's package cache, so the server is downloaded fresh on its next start (needs the internet).",
             "start-llama" => "Start the local model server.",
+            "install-skill" => $"Copy the {f.Item} skill into {SkillTarget() ?? "the first skill folder"}, where /skill finds it.",
             _ => fix
         };
+    }
+
+    private string? SkillTarget() =>
+        _cfg.Skills.Roots.Select(Expand).FirstOrDefault(r => !string.IsNullOrWhiteSpace(r));
+
+    /// <summary>Copies a skill's folder from its recipe path into the first skill folder.</summary>
+    public string InstallSkill(string name)
+    {
+        var recipe = Recipe("skill", name);
+        var source = recipe?.Path is null ? null : System.IO.Path.GetDirectoryName(Expand(recipe.Path));
+        var root = SkillTarget();
+        if (source is null || !Directory.Exists(source)) return $"there is no copy of {name} to install";
+        if (root is null) return "there is no skill folder in notecode.config.json";
+
+        var target = System.IO.Path.Combine(root, name);
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var dest = System.IO.Path.Combine(target, System.IO.Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dest)!);
+            File.Copy(file, dest, overwrite: true);
+        }
+        return $"copied into {target}";
     }
 
     /// <summary>The command line a script fix runs, or null for a fix the app does itself.</summary>
@@ -1035,7 +1093,20 @@ internal sealed class SystemDoctor
         cts.CancelAfter(TimeSpan.FromMinutes(10));
         var stdout = p.StandardOutput.ReadToEndAsync(cts.Token);
         var stderr = p.StandardError.ReadToEndAsync(cts.Token);
-        await p.WaitForExitAsync(cts.Token);
+        try
+        {
+            await p.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // A fix that is still running must not be left changing packages
+            // while the doctor checks the result: it is stopped, with everything
+            // it started, before anything else happens.
+            try { p.Kill(entireProcessTree: true); } catch { }
+            p.WaitForExit(10000);
+            if (ct.IsCancellationRequested) throw;
+            return (-1, "FAIL the fix ran for 10 minutes without finishing and was stopped");
+        }
         var lines = ((await stdout) + "\n" + (await stderr))
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var verdict = lines.LastOrDefault(l => l.StartsWith("OK ") || l.StartsWith("FAIL ")) ?? lines.LastOrDefault() ?? "";

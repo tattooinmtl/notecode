@@ -19,7 +19,12 @@ namespace Notecode.App;
 internal sealed partial class MainForm
 {
     private SystemDoctor? _doctor;
-    private bool _doctorRunning;
+
+    // One doctor at a time: /doctor and the model's notecode_doctor calls share
+    // this, so two of them can never repair the same thing at once.
+    private int _doctorBusy;
+    private bool TryEnterDoctor() => Interlocked.CompareExchange(ref _doctorBusy, 1, 0) == 0;
+    private void ExitDoctor() => Volatile.Write(ref _doctorBusy, 0);
 
     private SystemDoctor Doctor() =>
         _doctor ??= new SystemDoctor(_cfg, _providers, _mcp, ct => _llama.IsHealthyAsync(ct));
@@ -36,7 +41,7 @@ internal sealed partial class MainForm
             return;
         }
 
-        if (_doctorRunning)
+        if (Volatile.Read(ref _doctorBusy) == 1)
         {
             _chat.Note("The doctor is already running.", "notecode · doctor");
             return;
@@ -76,7 +81,11 @@ internal sealed partial class MainForm
             _chat.Log($"the doctor carries on from the {report.Phase} phase of the run started {report.Started}");
         }
 
-        _doctorRunning = true;
+        if (!TryEnterDoctor())
+        {
+            _chat.Note("The doctor is already running.", "notecode · doctor");
+            return;
+        }
         try
         {
             await RunDoctorProtocolAsync(report, CancellationToken.None);
@@ -89,7 +98,7 @@ internal sealed partial class MainForm
                        "Everything up to there is saved. `/doctor` carries on from here.", "notecode · doctor");
             return;
         }
-        finally { _doctorRunning = false; }
+        finally { ExitDoctor(); }
 
         _chat.Note(DoctorClosingNote(report), "notecode · doctor");
     }
@@ -126,31 +135,43 @@ internal sealed partial class MainForm
                     {
                         var fix = f.Fixes.FirstOrDefault(x => !f.FixesTried.Contains(x));
                         if (fix is null) continue;
-                        f.FixesTried.Add(fix);
-                        report.Save();
-                        f.RepairLog.Add(await ApplyDoctorFixAsync(f, fix, ct));
+
+                        // A fix counts as tried once it is approved: one that was
+                        // declined, or never reached because the app stopped, is
+                        // offered again on the next run. One that was approved is
+                        // not run twice, even if the app stopped while it ran.
+                        var result = await ApplyDoctorFixAsync(f, fix, ct, onApproved: () =>
+                        {
+                            f.FixesTried.Add(fix);
+                            report.Save();
+                        });
+                        f.RepairLog.Add(result);
                         report.Save();
                     }
                     break;
 
                 case "verify":
                 {
+                    if (!report.Findings.Any(f => f.FixesTried.Count > 0)) break;
+
+                    // The whole scope is checked again, not only what was
+                    // repaired: a skill that was broken because its server was
+                    // down is fixed by the server's repair.
                     _chat.Log("doctor 4/4: checking the repairs");
-                    var repaired = report.Findings.Where(f => f.FixesTried.Count > 0).ToList();
-                    foreach (var old in repaired)
+                    var scope = doctor.ResolveScope(report.Scope == "all" ? "" : report.Scope) ?? ("all", null);
+                    var again = await doctor.ScanAsync(scope.Area, scope.Item, progress, ct);
+                    foreach (var now in again)
                     {
-                        // A skill or a whole area is checked through its own scope.
-                        var area = old.Area == "local" ? "local" : old.Area;
-                        var again = await doctor.ScanAsync(area, old.Area == "local" ? null : old.Item, progress, ct);
-                        var now = again.FirstOrDefault(f => f.Key == old.Key);
-                        if (now is null) continue;
+                        var old = report.Findings.FirstOrDefault(f => f.Key == now.Key);
+                        if (old is null) continue;
                         now.RepairLog = old.RepairLog;
                         now.FixesTried = old.FixesTried;
                         now.Explanation = old.Explanation;
-                        now.RepairLog.Add(now.IsProblem ? $"checked again: still {DoctorReport.Label(now.Status)}" : "checked again: fixed");
-                        report.Findings[report.Findings.IndexOf(old)] = now;
-                        report.Save();
+                        if (old.FixesTried.Count > 0 || (old.IsProblem && !now.IsProblem))
+                            now.RepairLog.Add(now.IsProblem ? $"checked again: still {DoctorReport.Label(now.Status)}" : "checked again: fixed");
                     }
+                    report.Findings = again;
+                    report.Save();
                     break;
                 }
             }
@@ -163,10 +184,13 @@ internal sealed partial class MainForm
     private static string DoctorClosingNote(DoctorReport report)
     {
         var problems = report.Findings.Where(f => f.IsProblem).ToList();
+        var notChecked = report.Findings.Count(f => f.Status == DoctorStatus.Skipped);
         var sb = new StringBuilder();
-        sb.AppendLine(problems.Count == 0
-            ? "**Doctor** - everything checked works."
-            : $"**Doctor** - {problems.Count} thing{(problems.Count == 1 ? "" : "s")} need{(problems.Count == 1 ? "s" : "")} attention.");
+        sb.AppendLine(problems.Count > 0
+            ? $"**Doctor** - {problems.Count} thing{(problems.Count == 1 ? "" : "s")} need{(problems.Count == 1 ? "s" : "")} attention."
+            : notChecked > 0
+                ? $"**Doctor** - nothing is broken, but {notChecked} thing{(notChecked == 1 ? "" : "s")} couldn't be checked (offline?)."
+                : "**Doctor** - everything checked works.");
         sb.AppendLine();
         sb.AppendLine(report.Summary());
 
@@ -222,7 +246,8 @@ internal sealed partial class MainForm
     /// scripts in runtime/doctor/fixes or something the app does itself; the
     /// model never makes up a command.
     /// </summary>
-    private async Task<string> ApplyDoctorFixAsync(DoctorFinding f, string fix, CancellationToken ct)
+    private async Task<string> ApplyDoctorFixAsync(
+        DoctorFinding f, string fix, CancellationToken ct, Action? onApproved = null)
     {
         var doctor = Doctor();
         var what = doctor.DescribeFix(f, fix);
@@ -235,6 +260,7 @@ internal sealed partial class MainForm
         if (answer is CommandApproval.Denied or CommandApproval.TimedOut)
             return $"{fix}: skipped - not approved";
 
+        onApproved?.Invoke();
         _chat.Log($"doctor: {what}");
         try
         {
@@ -259,6 +285,8 @@ internal sealed partial class MainForm
                     if (def.OnDemand && tools >= 0) await _mcp.ReleaseAsync(f.Item);
                     return tools >= 0 ? $"{fix}: connected ({tools} tools)" : $"{fix}: it still doesn't connect";
                 }
+                case "install-skill":
+                    return $"{fix}: {doctor.InstallSkill(f.Item)}";
                 case "start-llama":
                 {
                     // StartAsync returns only when the wrapper's output closes,
@@ -329,11 +357,23 @@ internal sealed partial class MainForm
         if (scope is null)
             return $"There is nothing called '{item}'. Servers: {string.Join(", ", _cfg.Mcp.Servers.Keys)}.";
 
-        var findings = await doctor.ScanAsync(scope.Value.Area, scope.Value.Item, null, ct);
+        if (!TryEnterDoctor()) return "The doctor is already running. Try again when it has finished.";
+        try
+        {
+            return await DoctorToolScanAsync(doctor, scope.Value.Area, scope.Value.Item, repair, ct);
+        }
+        finally { ExitDoctor(); }
+    }
+
+    private async Task<string> DoctorToolScanAsync(
+        SystemDoctor doctor, string area, string? only, bool repair, CancellationToken ct)
+    {
+        var findings = await doctor.ScanAsync(area, only, null, ct);
         var sb = new StringBuilder();
         foreach (var f in findings)
         {
-            if (!f.IsProblem && scope.Value.Item is null) continue;
+            // Skipped is not working: it was not checked, and the model is told so.
+            if (!f.IsProblem && f.Status != DoctorStatus.Skipped && only is null) continue;
             sb.AppendLine($"{f.Item}: {DoctorReport.Label(f.Status)} - {f.Message}");
             if (f.Link is not null) sb.AppendLine($"  page: {f.Link}");
             if (f.Detail.Length > 0) sb.AppendLine($"  detail: {f.Detail}");
@@ -342,6 +382,15 @@ internal sealed partial class MainForm
             {
                 var result = await ApplyDoctorFixAsync(f, f.Fixes[0], ct);
                 sb.AppendLine($"  repair: {result}");
+
+                // The repair is checked, the same as /doctor's verify phase, so
+                // the model reports what is true now rather than what was tried.
+                var again = (await doctor.ScanAsync(f.Area == "local" ? "local" : f.Area, f.Area == "local" ? null : f.Item, null, ct))
+                    .FirstOrDefault(x => x.Key == f.Key);
+                if (again is not null)
+                    sb.AppendLine(again.IsProblem
+                        ? $"  checked again: still {DoctorReport.Label(again.Status)} - {again.Message}"
+                        : "  checked again: fixed");
             }
             else if (f.Fixes.Count > 0)
             {
@@ -349,9 +398,9 @@ internal sealed partial class MainForm
             }
         }
 
-        var okCount = findings.Count(f => !f.IsProblem);
+        var okCount = findings.Count(f => !f.IsProblem && f.Status != DoctorStatus.Skipped);
         if (sb.Length == 0) return $"Everything checked works ({okCount} items).";
-        if (scope.Value.Item is null) sb.AppendLine($"{okCount} other items work.");
+        if (only is null) sb.AppendLine($"{okCount} other items work.");
         return sb.ToString().TrimEnd();
     }
 }
