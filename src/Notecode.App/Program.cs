@@ -40,6 +40,10 @@ internal static class Program
             return;
         }
 
+        // Before anything is started: from here on, every process the app
+        // starts ends when the app does.
+        ProcessJob.AdoptCurrentProcess();
+
         AppConfig cfg;
         try
         {

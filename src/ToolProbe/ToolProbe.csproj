@@ -36,6 +36,8 @@
     <Compile Include="..\Notecode.App\HardwareScanner.cs" Link="HardwareScanner.cs" />
     <!-- Where the user data lives. HardwareProfile refers to it. -->
     <Compile Include="..\Notecode.App\AppPaths.cs" Link="AppPaths.cs" />
+    <!-- The job that ends every child process with the app. -->
+    <Compile Include="..\Notecode.App\ProcessJob.cs" Link="ProcessJob.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 
