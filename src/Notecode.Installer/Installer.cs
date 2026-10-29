@@ -132,8 +132,52 @@ internal static class Installer
         if (root["workspace"] is JsonObject workspace)
             workspace["root"] = Path.Combine(installDir, "workspace");
 
+        if (root["mcp"] is JsonObject mcp && mcp["servers"] is JsonObject servers)
+        {
+            // The config in the payload points the servers at the build
+            // machine. notecode's own file tools are installed with the app...
+            if (servers["notecode"] is JsonObject notecode)
+                notecode["args"] = new JsonArray(Path.Combine(installDir, "runtime", "notecode-mcp.mjs"));
+
+            // ...and Meshy is an extra pack, which meshy_installer.exe puts in
+            // the user's profile. Until it is installed, the doctor says where
+            // to get it.
+            if (servers["meshy"] is JsonObject meshy)
+            {
+                meshy["command"] = "node";
+                meshy["args"] = new JsonArray(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "notecode", "meshy", "server.mjs"));
+            }
+
+            // The servers the user installed - the extra packs - are kept in
+            // the user's own list, and an install of the app replaces this
+            // file. They are copied back in, so an update keeps them.
+            foreach (var (name, entry) in ReadUserServers())
+                servers[name] = entry;
+        }
+
         var options = new JsonSerializerOptions { WriteIndented = true };
         File.WriteAllText(configPath, root.ToJsonString(options));
+    }
+
+    /// <summary>The servers in the user's own list, %APPDATA%\notecode\mcp.json.</summary>
+    private static List<(string Name, JsonNode Entry)> ReadUserServers()
+    {
+        var list = new List<(string, JsonNode)>();
+        try
+        {
+            var path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "notecode", "mcp.json");
+            if (!File.Exists(path)) return list;
+            if (JsonNode.Parse(File.ReadAllText(path))?["mcpServers"] is JsonObject user)
+                foreach (var (name, entry) in user)
+                    if (entry is not null) list.Add((name, entry.DeepClone()));
+        }
+        catch
+        {
+            // A list that cannot be read adds nothing; the app's own servers stand.
+        }
+        return list;
     }
 
     /// <summary>Creates the shortcuts on the desktop and in the start menu.</summary>

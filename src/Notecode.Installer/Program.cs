@@ -85,7 +85,7 @@ internal static class Program
                 if (Packs.NodeProblem(pack) is { } problem) Console.Error.WriteLine(problem);
                 try
                 {
-                    Packs.InstallAsync(pack).GetAwaiter().GetResult();
+                    Packs.InstallAsync(pack, silent: true).GetAwaiter().GetResult();
                     Console.WriteLine($"{pack.Key} installed");
                 }
                 catch (Exception ex)

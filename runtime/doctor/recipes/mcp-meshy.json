@@ -1,33 +1,33 @@
 {
   "kind": "mcp",
   "name": "meshy",
+  "pack": "meshy",
   "title": "Meshy AI (cloud 3D generation)",
-  "summary": "Meshy's cloud API: text or image to 3D, texture, rig, animate, convert. Needs Node, the built server and a Meshy API key. Generating needs the internet.",
+  "summary": "Meshy's cloud API: text or image to 3D, texture, rig, animate, convert. Installed by meshy_installer.exe into the user's profile; needs Node 18+ and a Meshy API key. Generating needs the internet.",
   "config": {
     "transport": "stdio",
-    "command": "cmd.exe",
-    "args": [ "/d", "/c", "%ROOT%\\scripts\\meshy-mcp.cmd" ]
+    "command": "node",
+    "args": [ "%LOCALAPPDATA%\\notecode\\meshy\\server.mjs" ]
   },
   "needs": {
     "commands": [ { "name": "node", "min": "18.0.0", "get": "https://nodejs.org" } ],
     "files": [
-      { "path": "%ROOT%\\scripts\\meshy-mcp.cmd", "what": "the launcher" },
-      { "path": "%ROOT%\\meshy\\meshy-mcp-server\\package.json", "what": "the Meshy server folder" },
-      { "path": "%ROOT%\\meshy\\meshy-mcp-server\\node_modules", "what": "its packages", "fix": "reinstall-npm" },
-      { "path": "%ROOT%\\meshy\\meshy-mcp-server\\dist\\index.js", "what": "the built server", "fix": "reinstall-npm" }
+      { "path": "%LOCALAPPDATA%\\notecode\\meshy\\server.mjs", "what": "the installed server" },
+      { "path": "%LOCALAPPDATA%\\notecode\\meshy\\dist\\index.js", "what": "the built server", "fix": "reinstall-npm" },
+      { "path": "%LOCALAPPDATA%\\notecode\\meshy\\node_modules", "what": "its packages", "fix": "reinstall-npm" }
     ]
   },
-  "folder": "%ROOT%\\meshy\\meshy-mcp-server",
+  "folder": "%LOCALAPPDATA%\\notecode\\meshy",
   "key": {
     "label": "Meshy",
-    "envFile": "%ROOT%\\meshy\\meshy-mcp-server\\.env",
+    "envFile": "%LOCALAPPDATA%\\notecode\\meshy\\.env",
     "var": "MESHY_API_KEY",
     "placeholder": "your_api_key_here",
     "test": "https://api.meshy.ai/openapi/v1/balance",
-    "keyPage": "https://www.meshy.ai/settings/api",
-    "billingPage": "https://www.meshy.ai/settings/api"
+    "keyPage": "https://www.meshy.ai/developers/keys",
+    "billingPage": "https://www.meshy.ai/developers/keys"
   },
   "expect": { "minTools": 20 },
   "fixes": [ "reinstall-npm", "restore-config", "reconnect" ],
-  "howToUse": "Call meshy_check_balance first (free). Every create tool costs credits: say the cost and ask before calling one."
+  "howToUse": "Call meshy_check_balance first (free). Every create tool costs credits: say the cost and ask before calling one. Running meshy_installer.exe again updates the server and keeps the key."
 }

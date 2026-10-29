@@ -3,7 +3,11 @@ using System.Diagnostics;
 namespace Notecode.Installer;
 
 /// <summary>An extra pack: an installer on the download site that installs per user and takes --silent.</summary>
-internal sealed record Pack(string Key, string Title, string Detail, string Url, string File, Version? Node);
+/// <param name="AsksUser">
+/// The pack's own installer has something to ask (Meshy's asks for the API key),
+/// so in the window it is run with its window, not with --silent.
+/// </param>
+internal sealed record Pack(string Key, string Title, string Detail, string Url, string File, Version? Node, bool AsksUser = false);
 
 /// <summary>
 /// The extra packs the installer can add after the app.
@@ -25,6 +29,13 @@ internal static class Packs
             $"{Site}/downloads/mcp/rea_installer.exe",
             "rea_installer.exe",
             new Version(22, 19, 0)),
+        new("meshy",
+            "Meshy AI 3D generation (28 MCP tools)",
+            "A 55 MB download. Needs Node 18 or newer and a Meshy API key, which it asks for.",
+            $"{Site}/downloads/mcp/meshy_installer.exe",
+            "meshy_installer.exe",
+            new Version(18, 0, 0),
+            AsksUser: true),
     };
 
     public static Pack? Find(string key) =>
@@ -70,7 +81,7 @@ internal static class Packs
     /// is a Windows program and runs it with --silent. Throws with a message a
     /// person can read when any of that fails.
     /// </summary>
-    public static async Task InstallAsync(Pack pack, IProgress<string>? progress = null, CancellationToken ct = default)
+    public static async Task InstallAsync(Pack pack, IProgress<string>? progress = null, CancellationToken ct = default, bool silent = false)
     {
         var folder = Path.Combine(Path.GetTempPath(), "notecode-install");
         Directory.CreateDirectory(folder);
@@ -124,7 +135,9 @@ internal static class Packs
         using var run = Process.Start(new ProcessStartInfo
         {
             FileName = file,
-            Arguments = "--silent",
+            // A silent install of notecode installs the packs silently too; in
+            // the window, a pack that has a question gets its own window.
+            Arguments = silent || !pack.AsksUser ? "--silent" : "",
             UseShellExecute = true,
             WorkingDirectory = folder
         }) ?? throw new InvalidOperationException($"the {pack.Key} installer would not start");
