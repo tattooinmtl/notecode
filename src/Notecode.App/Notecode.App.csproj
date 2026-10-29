@@ -21,7 +21,7 @@
     <Version>1.2.0</Version>
     <FileVersion>1.2.0.0</FileVersion>
     <AssemblyVersion>1.2.0.0</AssemblyVersion>
-    <InformationalVersion>0.2.0</InformationalVersion>
+    <InformationalVersion>1.2.0</InformationalVersion>
     <Company>notecode</Company>
     <Product>notecode</Product>
     <Description>A dual-pane IDE over a local llama.cpp runtime.</Description>
